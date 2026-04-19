@@ -1,6 +1,18 @@
 [package]
-name = "altari-vega"
+name = "altair-vega"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.100"
+blake3 = "1.8.2"
+chacha20poly1305 = "0.10.1"
+clap = { version = "4.5.50", features = ["derive"] }
+iroh = "0.98.0"
+iroh-tickets = "0.5.0"
+rand = "0.8.5"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+spake2 = { version = "0.4.0", features = ["getrandom"] }
+thiserror = "2.0.17"
+tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
