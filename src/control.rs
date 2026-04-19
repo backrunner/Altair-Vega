@@ -39,6 +39,74 @@ pub struct ChatMessage {
     pub body: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileTransport {
+    NativeBlob,
+    ChunkedStream,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileDescriptor {
+    pub name: String,
+    pub size_bytes: u64,
+    pub hash: [u8; 32],
+    pub chunk_size_bytes: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileChunkRange {
+    pub start: u64,
+    pub end: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileResumeInfo {
+    pub chunk_size_bytes: u32,
+    pub local_bytes: u64,
+    pub missing_ranges: Vec<FileChunkRange>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileOffer {
+    pub transfer_id: u64,
+    pub descriptor: FileDescriptor,
+    pub transport: FileTransport,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileResponse {
+    pub transfer_id: u64,
+    pub accepted: bool,
+    pub reason: Option<String>,
+    pub resume: Option<FileResumeInfo>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileTicket {
+    pub transfer_id: u64,
+    pub ticket: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileProgressPhase {
+    Offered,
+    Accepted,
+    Sending,
+    Verifying,
+    Completed,
+    Cancelled,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileProgress {
+    pub transfer_id: u64,
+    pub phase: FileProgressPhase,
+    pub bytes_complete: u64,
+    pub total_bytes: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlBind {
     pub protocol_version: u16,
@@ -52,6 +120,11 @@ pub struct ControlBind {
 pub enum ControlFrame {
     Bind(ControlBind),
     Message(ChatMessage),
+    FileOffer(FileOffer),
+    FileResponse(FileResponse),
+    FileTicket(FileTicket),
+    FileProgress(FileProgress),
+    FileCancel { transfer_id: u64, reason: String },
     Close { reason: String },
 }
 
@@ -147,22 +220,48 @@ impl ControlSession {
 
     pub async fn receive_message(&mut self) -> Result<Option<ChatMessage>> {
         loop {
+            match self
+                .receive_frame()
+                .await
+                .context("receive control frame while waiting for message")?
+            {
+                Some(ControlFrame::Message(message)) => {
+                    return Ok(Some(message));
+                }
+                Some(ControlFrame::Close { .. }) => return Ok(None),
+                Some(ControlFrame::Bind(_)) => {
+                    bail!("received unexpected bind frame after session setup")
+                }
+                Some(ControlFrame::FileOffer(_))
+                | Some(ControlFrame::FileResponse(_))
+                | Some(ControlFrame::FileTicket(_))
+                | Some(ControlFrame::FileProgress(_))
+                | Some(ControlFrame::FileCancel { .. }) => continue,
+                None => return Ok(None),
+            }
+        }
+    }
+
+    pub async fn receive_frame(&mut self) -> Result<Option<ControlFrame>> {
+        loop {
             match read_frame(&mut self.recv)
                 .await
                 .context("read control frame")?
             {
                 Some(ControlFrame::Message(message)) => {
                     if self.seen_message_ids.insert(message.id) {
-                        return Ok(Some(message));
+                        return Ok(Some(ControlFrame::Message(message)));
                     }
                 }
-                Some(ControlFrame::Close { .. }) => return Ok(None),
-                Some(ControlFrame::Bind(_)) => {
-                    bail!("received unexpected bind frame after session setup")
-                }
-                None => return Ok(None),
+                other => return Ok(other),
             }
         }
+    }
+
+    pub async fn send_frame(&mut self, frame: ControlFrame) -> Result<()> {
+        write_frame(&mut self.send, &frame)
+            .await
+            .context("write control frame")
     }
 
     pub fn finish_sending(&mut self) -> Result<()> {
@@ -171,12 +270,29 @@ impl ControlSession {
     }
 
     pub async fn wait_for_send_completion(&self) -> Result<()> {
-        let _ = self
-            .send
-            .stopped()
-            .await
-            .context("wait for peer to read control stream")?;
+        match self.send.stopped().await {
+            Ok(_) => {}
+            Err(iroh::endpoint::StoppedError::ConnectionLost(
+                ConnectionError::ApplicationClosed(_),
+            )) => {}
+            Err(iroh::endpoint::StoppedError::ConnectionLost(ConnectionError::LocallyClosed)) => {}
+            Err(error) => return Err(error).context("wait for peer to read control stream"),
+        }
         Ok(())
+    }
+
+    pub async fn open_uni(&self) -> Result<iroh::endpoint::SendStream> {
+        self.connection
+            .open_uni()
+            .await
+            .context("open payload uni stream")
+    }
+
+    pub async fn accept_uni(&self) -> Result<iroh::endpoint::RecvStream> {
+        self.connection
+            .accept_uni()
+            .await
+            .context("accept payload uni stream")
     }
 
     fn new(
