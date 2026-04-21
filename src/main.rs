@@ -7,6 +7,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::{path::PathBuf, str::FromStr};
 
+mod browser_peer;
+
 #[derive(Debug, Parser)]
 #[command(name = "altair-vega")]
 #[command(about = "Early Altair Vega pairing and bootstrap tools")]
@@ -32,6 +34,10 @@ enum Command {
     File {
         #[command(subcommand)]
         command: FileCommand,
+    },
+    BrowserPeer {
+        #[command(subcommand)]
+        command: BrowserPeerCommand,
     },
 }
 
@@ -92,6 +98,17 @@ enum FileCommand {
         seeded_chunks: u64,
         #[arg(long)]
         receiver_state_root: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum BrowserPeerCommand {
+    Serve {
+        code: String,
+        #[arg(long, default_value = "ws://127.0.0.1:5173/__altair_vega_rendezvous")]
+        room_url: String,
+        #[arg(long, default_value = "browser-peer-downloads")]
+        output_dir: PathBuf,
     },
 }
 
@@ -264,6 +281,16 @@ async fn main() -> Result<()> {
                 println!("final bytes: {}", outcome.final_bytes);
                 println!("expected hash: {:02x?}", outcome.expected_hash);
                 println!("received hash: {:02x?}", outcome.received_hash);
+            }
+        },
+        Command::BrowserPeer { command } => match command {
+            BrowserPeerCommand::Serve {
+                code,
+                room_url,
+                output_dir,
+            } => {
+                let code = ShortCode::from_str(&code).context("parse short code")?;
+                browser_peer::run_browser_peer(code.normalized(), room_url, output_dir).await?;
             }
         },
     }

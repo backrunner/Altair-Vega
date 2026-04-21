@@ -20,8 +20,11 @@ thiserror = "2.0.17"
 tempfile = "3.23.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+futures-util = "0.3.31"
 iroh-blobs = { version = "0.99.0", default-features = false, features = ["fs-store"] }
-tokio = { version = "1.48.0", features = ["fs", "io-util", "macros", "rt-multi-thread"] }
+tokio = { version = "1.48.0", features = ["fs", "io-util", "macros", "rt-multi-thread", "signal"] }
+tokio-tungstenite = "0.29.0"
+url = "2.5.7"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 tokio = { version = "1.48.0", features = ["io-util", "macros", "rt", "time"] }

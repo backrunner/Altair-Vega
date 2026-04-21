@@ -1,18 +1,19 @@
 import type { ViteDevServer } from 'vite'
 import { WebSocketServer, type WebSocket } from 'ws'
+import {
+  RENDEZVOUS_PATH,
+  type RendezvousClientEvent,
+  type RendezvousServerEvent,
+  type RoomPeerInfo,
+} from '../rendezvous-protocol'
 
 type RoomPeer = {
   endpointId: string
   connectedAt: number
+  peerType?: string
+  label?: string
   socket: WebSocket
 }
-
-type ServerEvent =
-  | { type: 'snapshot'; peers: Array<{ endpointId: string; connectedAt: number }> }
-  | { type: 'peer-joined'; endpointId: string; connectedAt: number }
-  | { type: 'peer-left'; endpointId: string }
-
-const DEV_RENDEZVOUS_PATH = '/__altair_vega_dev_rendezvous'
 
 export function createDevRendezvousPlugin() {
   const rooms = new Map<string, Map<string, RoomPeer>>()
@@ -25,19 +26,21 @@ export function createDevRendezvousPlugin() {
 
       server.httpServer?.on('upgrade', (request, socket, head) => {
         const url = request.url ? new URL(request.url, 'http://127.0.0.1') : null
-        if (!url || url.pathname !== DEV_RENDEZVOUS_PATH) {
+        if (!url || url.pathname !== RENDEZVOUS_PATH) {
           return
         }
 
         const code = url.searchParams.get('code')?.trim()
         const endpointId = url.searchParams.get('endpointId')?.trim()
+        const peerType = url.searchParams.get('peerType')?.trim() || undefined
+        const label = url.searchParams.get('label')?.trim() || undefined
         if (!code || !endpointId) {
           socket.destroy()
           return
         }
 
         wss.handleUpgrade(request, socket, head, (ws) => {
-          attachPeer(rooms, ws, code, endpointId)
+          attachPeer(rooms, ws, code, endpointId, peerType, label)
         })
       })
     },
@@ -49,13 +52,17 @@ function attachPeer(
   socket: WebSocket,
   code: string,
   endpointId: string,
+  peerType?: string,
+  label?: string,
 ) {
   const room = rooms.get(code) ?? new Map<string, RoomPeer>()
   rooms.set(code, room)
 
-  const existingPeers = [...room.values()].map((peer) => ({
+  const existingPeers: RoomPeerInfo[] = [...room.values()].map((peer) => ({
     endpointId: peer.endpointId,
     connectedAt: peer.connectedAt,
+    peerType: peer.peerType,
+    label: peer.label,
   }))
 
   const duplicate = room.get(endpointId)
@@ -67,6 +74,8 @@ function attachPeer(
   const peer: RoomPeer = {
     endpointId,
     connectedAt: Date.now(),
+    peerType,
+    label,
     socket,
   }
   room.set(endpointId, peer)
@@ -79,6 +88,8 @@ function attachPeer(
     type: 'peer-joined',
     endpointId,
     connectedAt: peer.connectedAt,
+    peerType,
+    label,
   })
 
   socket.on('close', () => {
@@ -95,12 +106,33 @@ function attachPeer(
       rooms.delete(code)
     }
   })
+
+  socket.on('message', (raw) => {
+    let message: RendezvousClientEvent | null = null
+    try {
+      message = JSON.parse(String(raw)) as RendezvousClientEvent
+    } catch {
+      return
+    }
+    if (!message || message.type !== 'relay') {
+      return
+    }
+    const target = room.get(message.toEndpointId)
+    if (!target) {
+      return
+    }
+    send(target.socket, {
+      type: 'relay',
+      fromEndpointId: endpointId,
+      payload: message.payload,
+    })
+  })
 }
 
 function broadcast(
   room: Map<string, RoomPeer>,
   sourceEndpointId: string,
-  event: ServerEvent,
+  event: RendezvousServerEvent,
 ) {
   for (const peer of room.values()) {
     if (peer.endpointId === sourceEndpointId) {
@@ -110,7 +142,7 @@ function broadcast(
   }
 }
 
-function send(socket: WebSocket, event: ServerEvent) {
+function send(socket: WebSocket, event: RendezvousServerEvent) {
   if (socket.readyState !== socket.OPEN) {
     return
   }
