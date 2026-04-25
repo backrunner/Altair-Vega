@@ -18,9 +18,22 @@ runs it with any remaining arguments, and removes the downloaded executable and
 runtime state on exit unless -KeepRuntime is set.
 
 Environment:
-  ALTAIR_VEGA_BIN_URL   Default binary URL when -Url is omitted.
+  ALTAIR_VEGA_BIN_URL       Explicit binary URL when -Url is omitted.
+  ALTAIR_VEGA_GITHUB_REPO   GitHub repo for latest release lookup.
   ALTAIR_VEGA_RUNTIME_ROOT, TMPDIR, TMP, and TEMP are set for the launched process.
 "@
+}
+
+function Get-DefaultAltairVegaBinaryUrl {
+    $repo = if ($env:ALTAIR_VEGA_GITHUB_REPO) { $env:ALTAIR_VEGA_GITHUB_REPO } else { 'EL-File4138/Altair-Vega' }
+    $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+    switch ($arch) {
+        'X64' { $machine = 'x86_64' }
+        'Arm64' { $machine = 'aarch64' }
+        default { throw "unsupported architecture for default binary URL: $arch; pass -Url or set ALTAIR_VEGA_BIN_URL" }
+    }
+
+    "https://github.com/$repo/releases/latest/download/altair-vega-windows-$machine.exe"
 }
 
 function Download-AltairVegaBinary {
@@ -46,8 +59,7 @@ if ($Help) {
 }
 
 if (-not $Url) {
-    Write-Error 'missing binary URL; pass -Url or set ALTAIR_VEGA_BIN_URL'
-    exit 64
+    $Url = Get-DefaultAltairVegaBinaryUrl
 }
 
 if (-not $RuntimeParent) {

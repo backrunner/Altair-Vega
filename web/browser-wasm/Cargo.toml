@@ -1,7 +1,10 @@
 [package]
 name = "altair-vega-browser"
-version = "0.1.0"
+version = "0.9.0-RC1"
 edition = "2024"
+license = "BSD-3-Clause"
+repository = "https://github.com/EL-File4138/Altair-Vega"
+description = "Browser WASM peer package for Altair-Vega."
 
 [lib]
 crate-type = ["cdylib"]
@@ -12,7 +15,7 @@ anyhow = "1.0.100"
 async-channel = "2.5.0"
 blake3 = "1.8.2"
 hex = "0.4.3"
-iroh = "0.97.0"
+iroh = { version = "0.97.0", default-features = false }
 js-sys = "0.3.82"
 n0-future = "0.3.2"
 serde = { version = "1.0.228", features = ["derive"] }

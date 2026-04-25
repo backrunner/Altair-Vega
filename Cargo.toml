@@ -1,7 +1,10 @@
 [package]
 name = "altair-vega"
-version = "0.1.0"
+version = "0.9.0-RC1"
 edition = "2024"
+license = "BSD-3-Clause"
+repository = "https://github.com/EL-File4138/Altair-Vega"
+description = "Peer-to-peer transfer for messages, files, and two-peer folder sync."
 
 [dependencies]
 anyhow = "1.0.100"
@@ -9,7 +12,6 @@ base64 = "0.22.1"
 blake3 = "1.8.2"
 chacha20poly1305 = "0.10.1"
 clap = { version = "4.5.50", features = ["derive"] }
-iroh = { version = "0.97.0", default-features = false, features = ["address-lookup-mdns"] }
 iroh-tickets = "0.4.0"
 rand = "0.8.5"
 qrcode = "0.14.1"
@@ -23,6 +25,7 @@ tempfile = "3.23.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 futures-util = "0.3.31"
+iroh = { version = "0.97.0", default-features = false, features = ["address-lookup-mdns"] }
 iroh-blobs = { version = "0.99.0", default-features = false, features = ["fs-store"] }
 iroh-docs = { version = "0.97.0", default-features = false, features = ["fs-store"] }
 iroh-gossip = "0.97.0"
@@ -32,6 +35,7 @@ tokio-tungstenite = "0.29.0"
 url = "2.5.7"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+iroh = { version = "0.97.0", default-features = false }
 tokio = { version = "1.48.0", features = ["io-util", "macros", "rt", "time"] }
 
 [profile.release]
