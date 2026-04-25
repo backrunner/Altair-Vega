@@ -9,7 +9,7 @@ base64 = "0.22.1"
 blake3 = "1.8.2"
 chacha20poly1305 = "0.10.1"
 clap = { version = "4.5.50", features = ["derive"] }
-iroh = "0.97.0"
+iroh = { version = "0.97.0", features = ["address-lookup-mdns"] }
 iroh-tickets = "0.4.0"
 rand = "0.8.5"
 qrcode = "0.14.1"

@@ -12,7 +12,12 @@ use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine as _, engine::general_purpose};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use futures_util::{SinkExt, StreamExt};
-use iroh::{Endpoint, endpoint::presets, protocol::Router};
+use iroh::{
+    Endpoint,
+    address_lookup::{DiscoveryEvent, MdnsAddressLookup, UserData},
+    endpoint::presets,
+    protocol::Router,
+};
 use iroh_blobs::{
     BlobFormat, BlobsProtocol, HashAndFormat, store::fs::FsStore, ticket::BlobTicket,
 };
@@ -601,6 +606,22 @@ enum NativePairingPayload<'a> {
 enum ReceivedNativePairingPayload {
     Pake { payload: Vec<u8> },
     Bootstrap { envelope: PairingIntroEnvelope },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct LocalPairingInit {
+    pake: Vec<u8>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct LocalPairingReply {
+    pake: Vec<u8>,
+    bootstrap: PairingIntroEnvelope,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct LocalPairingFinish {
+    bootstrap: PairingIntroEnvelope,
 }
 
 struct NativeControlPeer {
@@ -2865,8 +2886,14 @@ async fn establish_native_control_peer(
     peer_type: &str,
     label: &str,
 ) -> Result<NativeControlPeer> {
-    let endpoint = Endpoint::builder(presets::N0)
-        .alpns(vec![CONTROL_ALPN.to_vec()])
+    let local_role = local_control_role(peer_type);
+    let mut endpoint_builder = Endpoint::builder(presets::N0).alpns(vec![CONTROL_ALPN.to_vec()]);
+    if let Some(role) = local_role {
+        endpoint_builder = endpoint_builder
+            .address_lookup(MdnsAddressLookup::builder())
+            .user_data_for_address_lookup(local_control_user_data(&code, role)?);
+    }
+    let endpoint = endpoint_builder
         .bind()
         .await
         .context("bind native control endpoint")?;
@@ -2878,13 +2905,58 @@ async fn establish_native_control_peer(
         Some(label.to_string()),
         unix_secs(now + ttl),
     );
+    if let Some(target_role) = local_control_target_role(peer_type) {
+        match wait_for_local_control_peer(
+            &endpoint,
+            &code,
+            target_role,
+            local_bundle.clone(),
+            now,
+            ttl,
+        )
+        .await
+        {
+            Ok(Some((pairing, remote_bundle))) => {
+                println!("found native peer on local network");
+                return Ok(NativeControlPeer {
+                    endpoint,
+                    pairing,
+                    local_bundle,
+                    remote_bundle,
+                });
+            }
+            Ok(None) => {}
+            Err(error) => println!("local discovery unavailable: {error}"),
+        }
+    }
+
     let mut handshake = Some(PairingHandshake::new(code.clone(), now, ttl));
     let endpoint_id = random_peer_id(peer_type);
     let url = room_url_for_code(room_url, &code, &endpoint_id, peer_type, label)?;
-    let (ws, _) = connect_async(url.as_str())
-        .await
-        .with_context(|| format!("connect native peer to rendezvous room at {url}"))?;
-    let (mut write, mut read) = ws.split();
+    let room = match connect_async(url.as_str()).await {
+        Ok((ws, _)) => Some(ws.split()),
+        Err(error) if local_role.is_some() || local_control_target_role(peer_type).is_some() => {
+            println!("rendezvous unavailable; continuing with local discovery only: {error}");
+            None
+        }
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("connect native peer to rendezvous room at {url}"));
+        }
+    };
+    if room.is_none() {
+        if let Some(target_role) = local_control_target_role(peer_type) {
+            return wait_for_local_control_peer_without_rendezvous(
+                endpoint,
+                code,
+                target_role,
+                label,
+            )
+            .await;
+        }
+        return accept_local_control_peer(endpoint, code, local_bundle, now, ttl).await;
+    }
+    let (mut write, mut read) = room.expect("room exists after early return");
     let mut established: Option<EstablishedPairing> = None;
     let mut remote_bundle: Option<IrohBootstrapBundle> = None;
     let mut pending_bootstrap: Option<PairingIntroEnvelope> = None;
@@ -2901,18 +2973,36 @@ async fn establish_native_control_peer(
             });
         }
 
-        let message = read
-            .next()
-            .await
-            .ok_or_else(|| {
-                anyhow::anyhow!("rendezvous room closed before native pairing completed")
-            })?
-            .context("read native rendezvous message")?;
-        let Some(text) = message.to_text().ok() else {
-            continue;
-        };
-        let Ok(event) = serde_json::from_str::<RoomServerEvent>(text) else {
-            continue;
+        let next_room_message = read.next();
+        tokio::pin!(next_room_message);
+        let event = tokio::select! {
+            maybe_local = endpoint.accept(), if local_role.is_some() => {
+                if let Some(incoming) = maybe_local {
+                    match incoming.accept().context("accept local native pairing connection")?.await {
+                        Ok(connection) => {
+                            let (pairing, remote_bundle) = complete_local_control_responder(connection, code.clone(), &local_bundle, now, ttl).await?;
+                            return Ok(NativeControlPeer { endpoint, pairing, local_bundle, remote_bundle });
+                        }
+                        Err(error) => {
+                            println!("local pairing error: {error}");
+                            continue;
+                        }
+                    }
+                }
+                continue;
+            }
+            message = &mut next_room_message => {
+                let message = message
+                    .ok_or_else(|| anyhow::anyhow!("rendezvous room closed before native pairing completed"))?
+                    .context("read native rendezvous message")?;
+                let Some(text) = message.to_text().ok() else {
+                    continue;
+                };
+                let Ok(event) = serde_json::from_str::<RoomServerEvent>(text) else {
+                    continue;
+                };
+                event
+            }
         };
         match event {
             RoomServerEvent::Snapshot { peers } => {
@@ -2980,6 +3070,274 @@ async fn establish_native_control_peer(
             RoomServerEvent::PeerLeft { .. } => {}
         }
     }
+}
+
+fn local_control_role(peer_type: &str) -> Option<&'static str> {
+    match peer_type {
+        "native-receive-text" => Some("receive-text"),
+        "native-receive-file" => Some("receive-file"),
+        _ => None,
+    }
+}
+
+fn local_control_target_role(peer_type: &str) -> Option<&'static str> {
+    match peer_type {
+        "native-send-text" => Some("receive-text"),
+        "native-send-file" => Some("receive-file"),
+        _ => None,
+    }
+}
+
+fn local_control_user_data_value(code: &ShortCode, role: &str) -> String {
+    format!("altair-vega:control:{role}:{}", code.normalized())
+}
+
+fn local_control_user_data(code: &ShortCode, role: &str) -> Result<UserData> {
+    UserData::try_from(local_control_user_data_value(code, role))
+        .context("build local native control discovery metadata")
+}
+
+async fn wait_for_local_control_peer(
+    endpoint: &Endpoint,
+    code: &ShortCode,
+    target_role: &str,
+    local_bundle: IrohBootstrapBundle,
+    now: SystemTime,
+    ttl: Duration,
+) -> Result<Option<(EstablishedPairing, IrohBootstrapBundle)>> {
+    let mdns = MdnsAddressLookup::builder()
+        .advertise(false)
+        .build(endpoint.id())
+        .context("start local native control discovery")?;
+    endpoint
+        .address_lookup()
+        .context("get local native control address lookup")?
+        .add(mdns.clone());
+    let mut events = mdns.subscribe().await;
+    let target_user_data = local_control_user_data_value(code, target_role);
+    let timeout = tokio::time::sleep(Duration::from_millis(2500));
+    tokio::pin!(timeout);
+
+    loop {
+        tokio::select! {
+            _ = &mut timeout => return Ok(None),
+            event = events.next() => {
+                let Some(event) = event else {
+                    return Ok(None);
+                };
+                let DiscoveryEvent::Discovered { endpoint_info, .. } = event else {
+                    continue;
+                };
+                if endpoint_info
+                    .data
+                    .user_data()
+                    .is_none_or(|user_data| user_data.as_ref() != target_user_data)
+                {
+                    continue;
+                }
+                match connect_local_control_peer(
+                    endpoint,
+                    endpoint_info.into_endpoint_addr(),
+                    code.clone(),
+                    &local_bundle,
+                    now,
+                    ttl,
+                )
+                .await
+                {
+                    Ok(pairing) => return Ok(Some(pairing)),
+                    Err(error) => println!("local native peer did not complete pairing: {error}"),
+                }
+            }
+        }
+    }
+}
+
+async fn wait_for_local_control_peer_without_rendezvous(
+    endpoint: Endpoint,
+    code: ShortCode,
+    target_role: &str,
+    label: &str,
+) -> Result<NativeControlPeer> {
+    println!("waiting for native peer on local network");
+    loop {
+        let now = SystemTime::now();
+        let ttl = Duration::from_secs(60);
+        let local_bundle = IrohBootstrapBundle::new(
+            EndpointTicket::new(endpoint.addr()),
+            PeerCapabilities::cli(),
+            Some(label.to_string()),
+            unix_secs(now + ttl),
+        );
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                bail!("stopped while waiting for local native peer");
+            }
+            result = wait_for_local_control_peer(
+                &endpoint,
+                &code,
+                target_role,
+                local_bundle.clone(),
+                now,
+                ttl,
+            ) => {
+                match result? {
+                    Some((pairing, remote_bundle)) => {
+                        println!("found native peer on local network");
+                        return Ok(NativeControlPeer {
+                            endpoint,
+                            pairing,
+                            local_bundle,
+                            remote_bundle,
+                        });
+                    }
+                    None => continue,
+                }
+            }
+        }
+    }
+}
+
+async fn connect_local_control_peer(
+    endpoint: &Endpoint,
+    peer: iroh::EndpointAddr,
+    code: ShortCode,
+    local_bundle: &IrohBootstrapBundle,
+    now: SystemTime,
+    ttl: Duration,
+) -> Result<(EstablishedPairing, IrohBootstrapBundle)> {
+    let connection = endpoint
+        .connect(peer, CONTROL_ALPN)
+        .await
+        .context("connect to local native peer")?;
+    let (mut send, mut recv) = connection
+        .open_bi()
+        .await
+        .context("open local native pairing stream")?;
+    let mut handshake = PairingHandshake::new(code, now, ttl);
+    write_json_frame(
+        &mut send,
+        &LocalPairingInit {
+            pake: handshake.outbound_pake_message().to_vec(),
+        },
+    )
+    .await?;
+    let reply: LocalPairingReply = read_json_frame(&mut recv).await?;
+    let pairing = handshake.finish(&reply.pake, SystemTime::now())?.clone();
+    let remote_bundle = pairing.open_bootstrap(&reply.bootstrap)?;
+    write_json_frame(
+        &mut send,
+        &LocalPairingFinish {
+            bootstrap: pairing.seal_bootstrap(local_bundle)?,
+        },
+    )
+    .await?;
+    send.finish()
+        .context("finish local native pairing stream")?;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    drop(connection);
+    Ok((pairing, remote_bundle))
+}
+
+async fn accept_local_control_peer(
+    endpoint: Endpoint,
+    code: ShortCode,
+    local_bundle: IrohBootstrapBundle,
+    now: SystemTime,
+    ttl: Duration,
+) -> Result<NativeControlPeer> {
+    loop {
+        let incoming = endpoint
+            .accept()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("endpoint closed before local native peer joined"))?;
+        match incoming
+            .accept()
+            .context("accept local native pairing connection")?
+            .await
+        {
+            Ok(connection) => {
+                let (pairing, remote_bundle) =
+                    complete_local_control_responder(connection, code, &local_bundle, now, ttl)
+                        .await?;
+                println!("found native peer on local network");
+                return Ok(NativeControlPeer {
+                    endpoint,
+                    pairing,
+                    local_bundle,
+                    remote_bundle,
+                });
+            }
+            Err(error) => println!("local pairing error: {error}"),
+        }
+    }
+}
+
+async fn complete_local_control_responder(
+    connection: iroh::endpoint::Connection,
+    code: ShortCode,
+    local_bundle: &IrohBootstrapBundle,
+    now: SystemTime,
+    ttl: Duration,
+) -> Result<(EstablishedPairing, IrohBootstrapBundle)> {
+    let (mut send, mut recv) = connection
+        .accept_bi()
+        .await
+        .context("accept local native pairing stream")?;
+    let init: LocalPairingInit = read_json_frame(&mut recv).await?;
+    let mut handshake = PairingHandshake::new(code, now, ttl);
+    let outbound_pake = handshake.outbound_pake_message().to_vec();
+    let pairing = handshake.finish(&init.pake, SystemTime::now())?.clone();
+    write_json_frame(
+        &mut send,
+        &LocalPairingReply {
+            pake: outbound_pake,
+            bootstrap: pairing.seal_bootstrap(local_bundle)?,
+        },
+    )
+    .await?;
+    let finish: LocalPairingFinish = read_json_frame(&mut recv).await?;
+    let remote_bundle = pairing.open_bootstrap(&finish.bootstrap)?;
+    send.finish().context("finish local native pairing reply")?;
+    drop(connection);
+    Ok((pairing, remote_bundle))
+}
+
+async fn write_json_frame<T: Serialize>(
+    send: &mut iroh::endpoint::SendStream,
+    value: &T,
+) -> Result<()> {
+    let payload = serde_json::to_vec(value).context("serialize local native pairing frame")?;
+    let len = u32::try_from(payload.len()).context("local native pairing frame length overflow")?;
+    send.write_all(&len.to_be_bytes())
+        .await
+        .context("write local native pairing frame length")?;
+    send.write_all(&payload)
+        .await
+        .context("write local native pairing frame payload")?;
+    send.flush()
+        .await
+        .context("flush local native pairing frame")?;
+    Ok(())
+}
+
+async fn read_json_frame<T: for<'de> Deserialize<'de>>(
+    recv: &mut iroh::endpoint::RecvStream,
+) -> Result<T> {
+    let mut len_buf = [0u8; 4];
+    recv.read_exact(&mut len_buf)
+        .await
+        .context("read local native pairing frame length")?;
+    let len = u32::from_be_bytes(len_buf) as usize;
+    ensure!(
+        len <= 256 * 1024,
+        "local native pairing frame exceeds max size"
+    );
+    let mut payload = vec![0u8; len];
+    recv.read_exact(&mut payload)
+        .await
+        .context("read local native pairing frame payload")?;
+    serde_json::from_slice(&payload).context("decode local native pairing frame")
 }
 
 async fn send_native_pake<S>(
@@ -3348,7 +3706,12 @@ async fn run_sync_host(
     qr: bool,
 ) -> Result<()> {
     let state_dir = resolve_runtime_state_dir(state_dir, ".altair-sync-docs-serve");
-    let node = sync_docs::DocsSyncNode::spawn_persistent(&state_dir).await?;
+    let local_code = if naked { None } else { Some(code.normalized()) };
+    let node = sync_docs::DocsSyncNode::spawn_persistent_with_local_code(
+        &state_dir,
+        local_code.as_deref(),
+    )
+    .await?;
     let current_manifest = scan_directory(&root, altair_vega::DEFAULT_SYNC_CHUNK_SIZE_BYTES)
         .with_context(|| format!("scan sync serve root {}", root.display()))?;
     let manifest_state_path = state_dir.join(format!(
@@ -3369,6 +3732,9 @@ async fn run_sync_host(
         current_manifest.clone(),
     )
     .await?;
+    if let Some(local_code) = &local_code {
+        node.set_local_sync_ticket(local_code, &result.ticket)?;
+    }
 
     if naked {
         save_docs_pair_state(&result.ticket, PairMode::Persistent)?;
@@ -3478,10 +3844,16 @@ async fn run_sync_host(
         "native-sync-host",
         "Native Sync Host",
     )?;
-    let (ws, _) = connect_async(url.as_str())
-        .await
-        .with_context(|| format!("connect sync host to rendezvous room at {url}"))?;
-    let (mut room_write, mut room_read) = ws.split();
+    let (mut room_write, mut room_read) = match connect_async(url.as_str()).await {
+        Ok((ws, _)) => {
+            let (write, read) = ws.split();
+            (Some(write), Some(read))
+        }
+        Err(error) => {
+            println!("rendezvous unavailable; continuing with local discovery only: {error}");
+            (None, None)
+        }
+    };
 
     println!("root: {}", root.display());
     println!("state dir: {}", state_dir.display());
@@ -3524,7 +3896,12 @@ async fn run_sync_host(
                     println!("remote sync error: {error}");
                 }
             }
-            maybe_room = room_read.next() => {
+            maybe_room = async {
+                match &mut room_read {
+                    Some(read) => read.next().await,
+                    None => std::future::pending().await,
+                }
+            } => {
                 let Some(message) = maybe_room else {
                     continue;
                 };
@@ -3538,11 +3915,15 @@ async fn run_sync_host(
                 match event {
                     RoomServerEvent::Snapshot { peers } => {
                         for peer in peers {
-                            send_sync_ticket(&mut room_write, &peer.endpoint_id, &result.ticket).await?;
+                            if let Some(write) = &mut room_write {
+                                send_sync_ticket(write, &peer.endpoint_id, &result.ticket).await?;
+                            }
                         }
                     }
                     RoomServerEvent::PeerJoined { endpoint_id } => {
-                        send_sync_ticket(&mut room_write, &endpoint_id, &result.ticket).await?;
+                        if let Some(write) = &mut room_write {
+                            send_sync_ticket(write, &endpoint_id, &result.ticket).await?;
+                        }
                     }
                     RoomServerEvent::PeerLeft { .. } | RoomServerEvent::Relay { .. } => {}
                 }
@@ -3618,6 +3999,17 @@ async fn resolve_sync_ticket_or_code(input: &str, room_url: &str, naked: bool) -
 }
 
 async fn wait_for_sync_ticket(code: &ShortCode, room_url: &str) -> Result<String> {
+    match wait_for_local_sync_ticket(code, Duration::from_millis(2500)).await {
+        Ok(Some(ticket)) => {
+            println!("found sync host on local network");
+            return Ok(ticket);
+        }
+        Ok(None) => {}
+        Err(error) => {
+            println!("local discovery unavailable: {error}");
+        }
+    }
+
     let endpoint_id = random_peer_id("native-sync-peer");
     let url = room_url_for_code(
         room_url,
@@ -3655,6 +4047,77 @@ async fn wait_for_sync_ticket(code: &ShortCode, room_url: &str) -> Result<String
     }
 
     anyhow::bail!("sync rendezvous room closed before receiving a sync ticket")
+}
+
+async fn wait_for_local_sync_ticket(
+    code: &ShortCode,
+    timeout: std::time::Duration,
+) -> Result<Option<String>> {
+    let endpoint = Endpoint::bind(presets::N0)
+        .await
+        .context("bind local sync discovery endpoint")?;
+    let mdns = MdnsAddressLookup::builder()
+        .advertise(false)
+        .build(endpoint.id())
+        .context("start local sync discovery")?;
+    endpoint
+        .address_lookup()
+        .context("get local sync address lookup")?
+        .add(mdns.clone());
+    let mut events = mdns.subscribe().await;
+    let target_user_data = sync_docs::local_sync_user_data_value(&code.normalized());
+    let timeout = tokio::time::sleep(timeout);
+    tokio::pin!(timeout);
+
+    loop {
+        tokio::select! {
+            _ = &mut timeout => return Ok(None),
+            event = events.next() => {
+                let Some(event) = event else {
+                    return Ok(None);
+                };
+                let DiscoveryEvent::Discovered { endpoint_info, .. } = event else {
+                    continue;
+                };
+                if endpoint_info
+                    .data
+                    .user_data()
+                    .is_none_or(|user_data| user_data.as_ref() != target_user_data)
+                {
+                    continue;
+                }
+                match request_local_sync_ticket(&endpoint, endpoint_info.into_endpoint_addr(), code).await {
+                    Ok(ticket) => return Ok(Some(ticket)),
+                    Err(error) => println!("local sync host did not return a ticket: {error}"),
+                }
+            }
+        }
+    }
+}
+
+async fn request_local_sync_ticket(
+    endpoint: &Endpoint,
+    peer: iroh::EndpointAddr,
+    code: &ShortCode,
+) -> Result<String> {
+    let connection = endpoint
+        .connect(peer, sync_docs::LOCAL_SYNC_TICKET_ALPN)
+        .await
+        .context("connect to local sync host")?;
+    let (mut send, mut recv) = connection
+        .open_bi()
+        .await
+        .context("open local sync ticket stream")?;
+    send.write_all(code.normalized().as_bytes())
+        .await
+        .context("write local sync code")?;
+    send.finish().context("finish local sync ticket request")?;
+    let response = recv
+        .read_to_end(64 * 1024)
+        .await
+        .context("read local sync ticket")?;
+    connection.close(0u8.into(), b"done");
+    String::from_utf8(response).context("decode local sync ticket")
 }
 
 async fn send_sync_ticket<S>(write: &mut S, to_endpoint_id: &str, ticket: &str) -> Result<()>

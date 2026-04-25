@@ -5,7 +5,12 @@ use altair_vega::{
 };
 use anyhow::{Context, Result, bail, ensure};
 use futures_util::StreamExt;
-use iroh::{Endpoint, endpoint::presets, protocol::Router};
+use iroh::{
+    Endpoint,
+    address_lookup::{MdnsAddressLookup, UserData},
+    endpoint::{Connection, presets},
+    protocol::{AcceptError, ProtocolHandler, Router},
+};
 use iroh_blobs::{
     ALPN as BLOBS_ALPN, BlobFormat, BlobsProtocol, HashAndFormat,
     api::Store as BlobsStore,
@@ -22,13 +27,27 @@ use iroh_docs::{
     store::Query,
 };
 use iroh_gossip::{ALPN as GOSSIP_ALPN, net::Gossip};
-use std::{fs, path::Path, str::FromStr, time::Duration};
+use std::{fs, path::Path, str::FromStr, sync::Arc, time::Duration};
 use tokio::io::AsyncWriteExt;
+
+pub const LOCAL_SYNC_TICKET_ALPN: &[u8] = b"altair-vega/local-sync-ticket/1";
 
 pub struct DocsSyncNode {
     router: Router,
     docs: Docs,
     blobs: BlobsStore,
+    local_ticket: Arc<std::sync::RwLock<Option<LocalSyncTicket>>>,
+}
+
+#[derive(Clone, Debug)]
+struct LocalSyncTicket {
+    code: String,
+    ticket: String,
+}
+
+#[derive(Clone, Debug)]
+struct LocalSyncTicketProtocol {
+    ticket: Arc<std::sync::RwLock<Option<LocalSyncTicket>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -46,6 +65,13 @@ pub struct DocsImportState {
 
 impl DocsSyncNode {
     pub async fn spawn_persistent(state_dir: &Path) -> Result<Self> {
+        Self::spawn_persistent_with_local_code(state_dir, None).await
+    }
+
+    pub async fn spawn_persistent_with_local_code(
+        state_dir: &Path,
+        local_code: Option<&str>,
+    ) -> Result<Self> {
         fs::create_dir_all(state_dir)
             .with_context(|| format!("create docs state dir {}", state_dir.display()))?;
         fs::create_dir_all(state_dir.join("docs-state")).with_context(|| {
@@ -54,7 +80,20 @@ impl DocsSyncNode {
                 state_dir.join("docs-state").display()
             )
         })?;
-        let endpoint = Endpoint::bind(presets::N0)
+        let mut endpoint_builder = Endpoint::builder(presets::N0)
+            .alpns(vec![
+                BLOBS_ALPN.to_vec(),
+                GOSSIP_ALPN.to_vec(),
+                DOCS_ALPN.to_vec(),
+                LOCAL_SYNC_TICKET_ALPN.to_vec(),
+            ])
+            .address_lookup(MdnsAddressLookup::builder());
+        if let Some(code) = local_code {
+            endpoint_builder =
+                endpoint_builder.user_data_for_address_lookup(local_sync_user_data(code)?);
+        }
+        let endpoint = endpoint_builder
+            .bind()
             .await
             .context("bind docs endpoint")?;
         let blobs = FsStore::load(state_dir.join("docs-blobs"))
@@ -69,16 +108,36 @@ impl DocsSyncNode {
             )
             .await
             .context("spawn docs protocol")?;
+        let local_ticket = Arc::new(std::sync::RwLock::new(None));
         let router = Router::builder(endpoint)
             .accept(BLOBS_ALPN, BlobsProtocol::new(&blobs, None))
             .accept(GOSSIP_ALPN, gossip)
             .accept(DOCS_ALPN, docs.clone())
+            .accept(
+                LOCAL_SYNC_TICKET_ALPN,
+                LocalSyncTicketProtocol {
+                    ticket: local_ticket.clone(),
+                },
+            )
             .spawn();
         Ok(Self {
             router,
             docs,
             blobs: BlobsStore::from(blobs),
+            local_ticket,
         })
+    }
+
+    pub fn set_local_sync_ticket(&self, code: &str, ticket: &str) -> Result<()> {
+        let mut state = self
+            .local_ticket
+            .write()
+            .map_err(|_| anyhow::anyhow!("local sync ticket state lock poisoned"))?;
+        *state = Some(LocalSyncTicket {
+            code: code.to_string(),
+            ticket: ticket.to_string(),
+        });
+        Ok(())
     }
 
     pub async fn export_directory(
@@ -485,6 +544,48 @@ pub async fn read_manifest(blobs: &BlobsStore, doc: &Doc) -> Result<SyncManifest
 
 const MANIFEST_PREFIX: &str = "manifest/";
 const PEER_TICKET_PREFIX: &str = "peer-ticket/";
+const LOCAL_SYNC_USER_DATA_PREFIX: &str = "altair-vega:sync:";
+const MAX_LOCAL_SYNC_CODE_BYTES: usize = 128;
+
+pub fn local_sync_user_data_value(code: &str) -> String {
+    format!("{LOCAL_SYNC_USER_DATA_PREFIX}{code}")
+}
+
+fn local_sync_user_data(code: &str) -> Result<UserData> {
+    UserData::try_from(local_sync_user_data_value(code))
+        .context("build local sync discovery metadata")
+}
+
+impl ProtocolHandler for LocalSyncTicketProtocol {
+    async fn accept(&self, connection: Connection) -> std::result::Result<(), AcceptError> {
+        let (mut send, mut recv) = connection.accept_bi().await?;
+        let request = recv
+            .read_to_end(MAX_LOCAL_SYNC_CODE_BYTES)
+            .await
+            .map_err(map_accept_error)?;
+        let requested_code = String::from_utf8(request).map_err(map_accept_error)?;
+        let ticket = {
+            let state = self
+                .ticket
+                .read()
+                .map_err(|_| map_accept_error("lock poisoned"))?;
+            match state.as_ref() {
+                Some(ticket) if ticket.code == requested_code => ticket.ticket.clone(),
+                _ => return Err(map_accept_error("local sync code is not available")),
+            }
+        };
+        send.write_all(ticket.as_bytes())
+            .await
+            .map_err(map_accept_error)?;
+        send.finish()?;
+        connection.closed().await;
+        Ok(())
+    }
+}
+
+fn map_accept_error(err: impl std::fmt::Display) -> AcceptError {
+    std::io::Error::other(err.to_string()).into()
+}
 
 fn manifest_key(path: &str) -> String {
     format!("{MANIFEST_PREFIX}{path}")
