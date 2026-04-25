@@ -1,7 +1,7 @@
 use altair_vega::{
     SyncAction, SyncEntry, SyncEntryState, SyncManifest, SyncMergePlan, join_sync_path,
     merge_manifests, scan_directory, sync_apply_target_path, sync_temp_path, unix_time_now_ms,
-    with_tombstones,
+    validate_sync_manifest, with_tombstones,
 };
 use anyhow::{Context, Result, bail, ensure};
 use futures_util::StreamExt;
@@ -539,7 +539,9 @@ pub async fn read_manifest(blobs: &BlobsStore, doc: &Doc) -> Result<SyncManifest
             serde_json::from_slice(&bytes).context("deserialize docs sync manifest entry")?;
         entries.push(sync_entry);
     }
-    Ok(SyncManifest::new(entries))
+    let manifest = SyncManifest::new(entries);
+    validate_sync_manifest(&manifest)?;
+    Ok(manifest)
 }
 
 const MANIFEST_PREFIX: &str = "manifest/";

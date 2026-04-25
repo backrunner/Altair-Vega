@@ -247,7 +247,28 @@ impl SyncManifest {
 pub fn scan_directory(root: &Path, chunk_size_bytes: u32) -> Result<SyncManifest> {
     let mut entries = Vec::new();
     collect_entries(root, root, chunk_size_bytes, &mut entries)?;
-    Ok(SyncManifest::new(entries))
+    let manifest = SyncManifest::new(entries);
+    validate_sync_manifest(&manifest)?;
+    Ok(manifest)
+}
+
+pub fn validate_sync_manifest(manifest: &SyncManifest) -> Result<()> {
+    let mut case_folded_paths = BTreeMap::<String, String>::new();
+    for entry in manifest.entries.values() {
+        ensure!(
+            entry.path == entry.path.trim() && !entry.path.is_empty(),
+            "sync manifest path is empty or padded"
+        );
+        join_sync_path(Path::new(""), &entry.path)?;
+        let case_folded = entry.path.to_lowercase();
+        if let Some(existing) = case_folded_paths.insert(case_folded, entry.path.clone()) {
+            bail!(
+                "sync path case-insensitive collision: {existing} conflicts with {}",
+                entry.path
+            );
+        }
+    }
+    Ok(())
 }
 
 pub fn join_sync_path(root: &Path, relative_path: &str) -> Result<PathBuf> {
@@ -501,11 +522,15 @@ fn collect_entries(
     paths.sort();
 
     for path in paths {
-        let metadata =
-            fs::metadata(&path).with_context(|| format!("stat sync path {}", path.display()))?;
+        let metadata = fs::symlink_metadata(&path)
+            .with_context(|| format!("stat sync path {}", path.display()))?;
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
         if should_ignore_sync_path(&path, metadata.is_dir()) {
             continue;
         }
+        let _relative = normalize_relative_path(root, &path)?;
         if metadata.is_dir() {
             collect_entries(root, &path, chunk_size_bytes, entries)?;
             continue;
@@ -720,7 +745,7 @@ mod tests {
         DEFAULT_SYNC_CHUNK_SIZE_BYTES, SyncAction, SyncChange, SyncChangeKind,
         SyncConflictResolution, SyncEntry, SyncEntryState, SyncManifest, apply_merge_plan,
         conflict_copy_path, diff_manifests, join_sync_path, merge_manifests, scan_directory,
-        unix_time_now_ms, with_tombstones,
+        unix_time_now_ms, validate_sync_manifest, with_tombstones,
     };
     use crate::FileDescriptor;
     use std::{fs, path::Path};
@@ -1090,6 +1115,78 @@ mod tests {
             manifest
                 .get("readme.altair-conflict-deadbeef.txt")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn scan_rejects_case_insensitive_path_collisions() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("Readme.txt"), b"upper").unwrap();
+        fs::write(temp.path().join("readme.txt"), b"lower").unwrap();
+
+        let error = scan_directory(temp.path(), DEFAULT_SYNC_CHUNK_SIZE_BYTES).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("sync path case-insensitive collision")
+        );
+    }
+
+    #[test]
+    fn manifest_validation_rejects_remote_case_insensitive_collisions() {
+        let manifest = SyncManifest::new([
+            file_entry("Docs/readme.txt", 1),
+            file_entry("docs/README.txt", 2),
+        ]);
+
+        let error = validate_sync_manifest(&manifest).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("sync path case-insensitive collision")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_ignores_symlinks_without_following_targets() {
+        let temp = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        fs::write(outside.path().join("outside.txt"), b"outside").unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("outside.txt"),
+            temp.path().join("link.txt"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(outside.path(), temp.path().join("linked-dir")).unwrap();
+        fs::write(temp.path().join("keep.txt"), b"keep").unwrap();
+
+        let manifest = scan_directory(temp.path(), DEFAULT_SYNC_CHUNK_SIZE_BYTES).unwrap();
+
+        assert_eq!(manifest.len(), 1);
+        assert!(manifest.get("keep.txt").is_some());
+        assert!(manifest.get("link.txt").is_none());
+        assert!(manifest.get("linked-dir/outside.txt").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_rejects_non_utf8_real_paths() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let temp = TempDir::new().unwrap();
+        let non_utf8_name = OsString::from_vec(vec![b'b', b'a', b'd', 0xff]);
+        fs::write(temp.path().join(non_utf8_name), b"bad").unwrap();
+
+        let error = scan_directory(temp.path(), DEFAULT_SYNC_CHUNK_SIZE_BYTES).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("sync path contains non-utf8 component")
         );
     }
 
