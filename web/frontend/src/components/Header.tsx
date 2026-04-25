@@ -64,7 +64,10 @@ export default function Header() {
         >
           {state.sidebarOpen ? <CloseIcon /> : <MenuIcon />}
         </button>
-        <div class="header__brand">Altair Vega</div>
+        <div class="header__brand">
+          <img class="header__logo" src="logo.png" alt="" aria-hidden="true" />
+          <span>Altair-Vega</span>
+        </div>
         <ConnectionStatus />
       </div>
 

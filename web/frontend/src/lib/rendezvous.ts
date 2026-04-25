@@ -2,6 +2,7 @@ import { describeRendezvousClose, RENDEZVOUS_PATH } from '../../../rendezvous-pr
 import type { ResumeRelayPayload, RendezvousEvent, RoomConnection, PresenceMessage } from './types'
 
 const DEFAULT_RENDEZVOUS_URL = import.meta.env.VITE_DEFAULT_RENDEZVOUS_URL?.trim() ?? ''
+const DEFAULT_RENDEZVOUS_PATH = import.meta.env.VITE_RENDEZVOUS_PATH?.trim() || RENDEZVOUS_PATH
 const MAX_RECONNECT_ATTEMPTS = 5
 const RECONNECT_BASE_DELAY_MS = 500
 
@@ -23,7 +24,11 @@ export function getRendezvousUrl(): URL {
     return new URL(DEFAULT_RENDEZVOUS_URL)
   }
 
-  const url = new URL(RENDEZVOUS_PATH, window.location.origin)
+  const path = DEFAULT_RENDEZVOUS_PATH.startsWith('/')
+    ? DEFAULT_RENDEZVOUS_PATH
+    : DEFAULT_RENDEZVOUS_PATH.replace(/^\.\//, '')
+  const base = DEFAULT_RENDEZVOUS_PATH.startsWith('/') ? window.location.origin : window.location.href
+  const url = new URL(path, base)
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
   return url
 }

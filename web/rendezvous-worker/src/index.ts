@@ -48,7 +48,7 @@ export default {
       })
     }
 
-    if (url.pathname !== RENDEZVOUS_PATH) {
+    if (!isRendezvousPath(url.pathname)) {
       return new Response('Not found', { status: 404 })
     }
 
@@ -76,6 +76,10 @@ export default {
     nextUrl.searchParams.set('maxMessageBytes', env.MAX_MESSAGE_BYTES ?? '')
     return env.ROOMS.get(id).fetch(new Request(nextUrl, request))
   },
+}
+
+function isRendezvousPath(pathname: string) {
+  return pathname === RENDEZVOUS_PATH || pathname.endsWith(`/${RENDEZVOUS_PATH.replace(/^\//, '')}`)
 }
 
 export class Room extends DurableObject {
