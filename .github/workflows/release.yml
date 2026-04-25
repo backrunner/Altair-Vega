@@ -22,6 +22,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release
+        env:
+          ALTAIR_VEGA_DEFAULT_RENDEZVOUS: wss://tools.elfile4138.moe/altair-vega/__altair_vega_rendezvous
       - name: Package artifact
         shell: bash
         run: scripts/release-artifacts.sh "dist/release-${{ runner.os }}-${{ runner.arch }}"

@@ -29,6 +29,12 @@ It uses [iroh](https://www.iroh.computer/) for direct peer connectivity and shor
 
 ## Quick Start
 
+Try the [hosted web app](https://tools.elfile4138.moe/altair-vega/).
+
+*The hosted web app and rendezvous endpoint are provided for free by the author for demo and personal-use convenience. They do not come with an availability guarantee; self-host the static frontend and Worker rendezvous service for production or dependency-sensitive use.*
+
+***
+
 Run the latest release through the disposable launcher:
 
 ```sh
