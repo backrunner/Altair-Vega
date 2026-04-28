@@ -2,10 +2,11 @@ use altair_vega::{FileChunkRange, FileDescriptor, ShortCode};
 use anyhow::{Context, Result};
 use async_channel::Sender;
 use iroh::{
-    Endpoint, EndpointId,
+    Endpoint, EndpointAddr, EndpointId,
     endpoint::Connection,
     protocol::{AcceptError, ProtocolHandler, Router},
 };
+use iroh_tickets::endpoint::EndpointTicket;
 use n0_future::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -146,11 +147,12 @@ impl BrowserNode {
         Ok((Self { router, shared }, event_receiver))
     }
 
-    async fn send_message_inner(&self, endpoint_id: EndpointId, body: String) -> Result<()> {
+    async fn send_message_inner(&self, endpoint_addr: EndpointAddr, body: String) -> Result<()> {
+        let endpoint_id = endpoint_addr.id;
         let connection = self
             .router
             .endpoint()
-            .connect(endpoint_id, WEB_MESSAGE_ALPN)
+            .connect(endpoint_addr, WEB_MESSAGE_ALPN)
             .await
             .context("dial remote browser endpoint")?;
 
@@ -179,12 +181,13 @@ impl BrowserNode {
 
     async fn send_file_inner(
         &self,
-        endpoint_id: EndpointId,
+        endpoint_addr: EndpointAddr,
         name: String,
         mime_type: String,
         bytes: Vec<u8>,
         missing_ranges: Option<Vec<FileChunkRange>>,
     ) -> Result<()> {
+        let endpoint_id = endpoint_addr.id;
         let transfer_id = self.shared.next_transfer_id.fetch_add(1, Ordering::Relaxed);
         let descriptor = FileDescriptor {
             name: name.clone(),
@@ -202,7 +205,7 @@ impl BrowserNode {
         let connection = self
             .router
             .endpoint()
-            .connect(endpoint_id, WEB_FILE_ALPN)
+            .connect(endpoint_addr, WEB_FILE_ALPN)
             .await
             .context("dial remote browser file endpoint")?;
         let (mut send, mut recv) = connection.open_bi().await.context("open file stream")?;
@@ -486,17 +489,41 @@ impl WasmBrowserNode {
         self.inner.endpoint_id_string()
     }
 
+    pub async fn endpoint_ticket(&self) -> Result<String, JsError> {
+        let endpoint = self.inner.router.endpoint();
+        endpoint.online().await;
+        Ok(EndpointTicket::new(endpoint.addr()).to_string())
+    }
+
     pub fn events(&self) -> JsReadableStream {
         into_js_readable_stream(self.events.clone())
     }
 
     pub async fn send_message(&self, endpoint_id: String, body: String) -> Result<(), JsError> {
-        let endpoint_id = endpoint_id
+        let endpoint_id: EndpointId = endpoint_id
             .parse()
             .context("parse endpoint id")
             .map_err(to_js_err)?;
         self.inner
-            .send_message_inner(endpoint_id, body.clone())
+            .send_message_inner(endpoint_id.into(), body.clone())
+            .await
+            .map_err(to_js_err)?;
+        Ok(())
+    }
+
+    pub async fn send_message_to_ticket(
+        &self,
+        endpoint_ticket: String,
+        body: String,
+    ) -> Result<(), JsError> {
+        let endpoint_addr = endpoint_ticket
+            .parse::<EndpointTicket>()
+            .context("parse endpoint ticket")
+            .map_err(to_js_err)?
+            .endpoint_addr()
+            .clone();
+        self.inner
+            .send_message_inner(endpoint_addr, body.clone())
             .await
             .map_err(to_js_err)?;
         Ok(())
@@ -521,7 +548,7 @@ impl WasmBrowserNode {
         bytes: js_sys::Uint8Array,
         missing_ranges: wasm_bindgen::JsValue,
     ) -> Result<(), JsError> {
-        let endpoint_id = endpoint_id
+        let endpoint_id: EndpointId = endpoint_id
             .parse()
             .context("parse endpoint id")
             .map_err(to_js_err)?;
@@ -534,7 +561,36 @@ impl WasmBrowserNode {
             )
         };
         self.inner
-            .send_file_inner(endpoint_id, name, mime_type, bytes.to_vec(), missing_ranges)
+            .send_file_inner(endpoint_id.into(), name, mime_type, bytes.to_vec(), missing_ranges)
+            .await
+            .map_err(to_js_err)?;
+        Ok(())
+    }
+
+    pub async fn send_file_to_ticket_with_ranges(
+        &self,
+        endpoint_ticket: String,
+        name: String,
+        mime_type: String,
+        bytes: js_sys::Uint8Array,
+        missing_ranges: wasm_bindgen::JsValue,
+    ) -> Result<(), JsError> {
+        let endpoint_addr = endpoint_ticket
+            .parse::<EndpointTicket>()
+            .context("parse endpoint ticket")
+            .map_err(to_js_err)?
+            .endpoint_addr()
+            .clone();
+        let missing_ranges = if missing_ranges.is_null() || missing_ranges.is_undefined() {
+            None
+        } else {
+            Some(
+                serde_wasm_bindgen::from_value::<Vec<FileChunkRange>>(missing_ranges)
+                    .map_err(to_js_err)?,
+            )
+        };
+        self.inner
+            .send_file_inner(endpoint_addr, name, mime_type, bytes.to_vec(), missing_ranges)
             .await
             .map_err(to_js_err)?;
         Ok(())

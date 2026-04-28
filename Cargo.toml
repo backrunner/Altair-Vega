@@ -6,6 +6,11 @@ license = "BSD-3-Clause"
 repository = "https://github.com/EL-File4138/Altair-Vega"
 description = "Peer-to-peer transfer for messages, files, and two-peer folder sync."
 
+[workspace]
+members = [".", "web/browser-wasm"]
+default-members = ["."]
+resolver = "3"
+
 [dependencies]
 anyhow = "1.0.100"
 base64 = "0.22.1"

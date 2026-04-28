@@ -16,6 +16,7 @@ async-channel = "2.5.0"
 blake3 = "1.8.2"
 hex = "0.4.3"
 iroh = { version = "0.97.0", default-features = false }
+iroh-tickets = "0.4.0"
 js-sys = "0.3.82"
 n0-future = "0.3.2"
 serde = { version = "1.0.228", features = ["derive"] }

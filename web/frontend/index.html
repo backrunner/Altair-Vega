@@ -3,8 +3,42 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
     <title>Altair-Vega</title>
     <link rel="icon" type="image/png" href="logo.png" />
+    <script>
+      (() => {
+        const storageKey = 'altair-vega:theme'
+        let theme = 'dark'
+        try {
+          const stored = window.localStorage.getItem(storageKey)
+          if (stored === 'light' || stored === 'dark') {
+            theme = stored
+          } else if (window.matchMedia('(prefers-color-scheme: light)').matches) {
+            theme = 'light'
+          }
+        } catch {
+          theme = window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+        }
+        document.documentElement.dataset.theme = theme
+        document.documentElement.style.colorScheme = theme
+      })()
+    </script>
+    <style>
+      html[data-theme='light'] {
+        background: #f7f9ff;
+        color: #11172a;
+      }
+
+      html[data-theme='dark'] {
+        background: #090d18;
+        color: #f5f7ff;
+      }
+
+      body {
+        background: inherit;
+      }
+    </style>
     <script type="module" src="/src/index.tsx"></script>
   </head>
   <body>

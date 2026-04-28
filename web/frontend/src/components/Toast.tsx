@@ -1,8 +1,9 @@
 import { For, createEffect, createSignal, onCleanup } from 'solid-js'
+import { AlertTriangle, Check, Info, X, XCircle } from 'lucide-solid'
 
 import { dismissToast, state } from '../lib/state'
-
-import './Toast.css'
+import { cx } from '../lib/cx'
+import { IconButton } from './ui/Button'
 
 type VisibleToast = {
   id: string
@@ -14,52 +15,42 @@ type VisibleToast = {
 
 const EXIT_DELAY_MS = 180
 
-function toastColorClass(type: VisibleToast['type']) {
-  if (type === 'success') return 'toast-card--success'
-  if (type === 'warning') return 'toast-card--warning'
-  if (type === 'error') return 'toast-card--error'
-  return 'toast-card--info'
+const toastStackClass = [
+  'fixed bottom-[var(--space-4)] left-1/2 z-[1300]',
+  'flex w-[min(420px,calc(100vw-var(--space-6)))] -translate-x-1/2 flex-col gap-[var(--space-3)]',
+  'pointer-events-none min-[561px]:left-auto min-[561px]:right-[var(--space-4)]',
+  'min-[561px]:w-[min(360px,calc(100vw-var(--space-8)))] min-[561px]:translate-x-0',
+].join(' ')
+const toastCardClass = [
+  'grid min-h-12 grid-cols-[auto_1fr_auto] items-center gap-[var(--space-3)]',
+  'border border-[var(--color-border)] rounded-[var(--radius-lg)]',
+  'bg-[color-mix(in_srgb,var(--color-surface-raised)_92%,transparent)]',
+  'p-[var(--space-3)] shadow-[var(--shadow-lg)] backdrop-blur-[12px]',
+  'pointer-events-auto animate-[toast-enter_var(--duration-slow)_var(--ease-out)_both]',
+  'transform-gpu transition duration-[var(--duration-fast)] ease-[var(--ease-out)] will-change-transform',
+].join(' ')
+const toastClosingClass = 'translate-y-[6px] scale-[0.98] opacity-0'
+const toastIconBaseClass = 'h-[18px] w-[18px] self-center'
+const toastTextClass = 'min-w-0 self-center text-[var(--color-text)] text-[length:var(--text-sm)] leading-[var(--leading-normal)]'
+const toastDismissClass = 'h-7 min-w-7 w-7'
+
+function toastIconToneClass(type: VisibleToast['type']) {
+  if (type === 'success') return 'text-[var(--color-success)]'
+  if (type === 'warning') return 'text-[var(--color-warning)]'
+  if (type === 'error') return 'text-[var(--color-danger)]'
+  return 'text-[var(--color-accent)]'
 }
 
 function ToastIcon(props: { type: VisibleToast['type'] }) {
-  if (props.type === 'success') {
-    return (
-      <svg viewBox="0 0 20 20" aria-hidden="true">
-        <path d="M4.5 10.5 8 14l7.5-8" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" />
-      </svg>
-    )
-  }
-
-  if (props.type === 'warning') {
-    return (
-      <svg viewBox="0 0 20 20" aria-hidden="true">
-        <path d="M10 3.5 17 16.5H3L10 3.5Z" fill="none" stroke="currentColor" stroke-linejoin="round" stroke-width="1.6" />
-        <path d="M10 7.5v4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8" />
-        <circle cx="10" cy="14" r="1" fill="currentColor" />
-      </svg>
-    )
-  }
-
-  if (props.type === 'error') {
-    return (
-      <svg viewBox="0 0 20 20" aria-hidden="true">
-        <circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" stroke-width="1.6" />
-        <path d="M7.5 7.5l5 5m0-5-5 5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8" />
-      </svg>
-    )
-  }
-
-  return (
-    <svg viewBox="0 0 20 20" aria-hidden="true">
-      <circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" stroke-width="1.6" />
-      <path d="M10 9v4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8" />
-      <circle cx="10" cy="6.2" r="1" fill="currentColor" />
-    </svg>
-  )
+  if (props.type === 'success') return <Check size={18} aria-hidden="true" />
+  if (props.type === 'warning') return <AlertTriangle size={18} aria-hidden="true" />
+  if (props.type === 'error') return <XCircle size={18} aria-hidden="true" />
+  return <Info size={18} aria-hidden="true" />
 }
 
 export default function Toast() {
-  const [visibleToasts, setVisibleToasts] = createSignal<VisibleToast[]>([])
+  const [visibleToastIds, setVisibleToastIds] = createSignal<string[]>([])
+  const [visibleToasts, setVisibleToasts] = createSignal<Record<string, VisibleToast>>({})
   const exitTimers = new Map<string, number>()
 
   createEffect(() => {
@@ -67,21 +58,42 @@ export default function Toast() {
     const nextIds = new Set(next.map((toast) => toast.id))
 
     setVisibleToasts((current) => {
-      const closing = current.filter((toast) => !nextIds.has(toast.id))
+      const updated = { ...current }
 
-      for (const toast of closing) {
-        if (exitTimers.has(toast.id)) continue
-        const timer = window.setTimeout(() => {
-          setVisibleToasts((items) => items.filter((item) => item.id !== toast.id))
+      for (const toast of next) {
+        updated[toast.id] = current[toast.id]?.closing
+          ? { ...toast, closing: false }
+          : (current[toast.id] ?? { ...toast, closing: false })
+
+        const timer = exitTimers.get(toast.id)
+        if (timer) {
+          window.clearTimeout(timer)
           exitTimers.delete(toast.id)
-        }, EXIT_DELAY_MS)
-        exitTimers.set(toast.id, timer)
+        }
       }
 
-      return [
-        ...next.map((toast) => ({ ...toast, closing: false })),
-        ...closing.map((toast) => ({ ...toast, closing: true })),
-      ]
+      for (const [id, toast] of Object.entries(current)) {
+        if (nextIds.has(id)) continue
+        if (!toast.closing) updated[id] = { ...toast, closing: true }
+        if (exitTimers.has(id)) continue
+        const timer = window.setTimeout(() => {
+          setVisibleToastIds((ids) => ids.filter((toastId) => toastId !== id))
+          setVisibleToasts((items) => {
+            const remaining = { ...items }
+            delete remaining[id]
+            return remaining
+          })
+          exitTimers.delete(id)
+        }, EXIT_DELAY_MS)
+        exitTimers.set(id, timer)
+      }
+
+      return updated
+    })
+
+    setVisibleToastIds((current) => {
+      const closingIds = current.filter((id) => !nextIds.has(id))
+      return [...next.map((toast) => toast.id), ...closingIds]
     })
   })
 
@@ -92,21 +104,23 @@ export default function Toast() {
   })
 
   return (
-    <div class="toast-stack" aria-live="polite" aria-atomic="false">
-      <For each={visibleToasts()}>
-        {(toast) => (
-          <div class={`toast-card ${toastColorClass(toast.type)}${toast.closing ? ' toast-card--closing' : ''}`} role="status">
-            <div class="toast-card__icon" aria-hidden="true">
-              <ToastIcon type={toast.type} />
+    <div class={toastStackClass} aria-live="polite" aria-atomic="false">
+      <For each={visibleToastIds()}>
+        {(toastId) => {
+          const toast = () => visibleToasts()[toastId]
+
+          return (
+            <div class={cx(toastCardClass, toast()?.closing && toastClosingClass)} role="status">
+              <div class={cx(toastIconBaseClass, toastIconToneClass(toast()?.type ?? 'info'))} aria-hidden="true">
+                <ToastIcon type={toast()?.type ?? 'info'} />
+              </div>
+              <div class={toastTextClass}>{toast()?.text}</div>
+              <IconButton class={toastDismissClass} variant="ghost" label="Dismiss notification" onClick={() => dismissToast(toastId)}>
+                <X size={14} />
+              </IconButton>
             </div>
-            <div class="toast-card__text">{toast.text}</div>
-            <button class="btn btn-ghost btn-icon toast-card__dismiss" type="button" onClick={() => dismissToast(toast.id)} aria-label="Dismiss notification">
-              <svg viewBox="0 0 20 20" aria-hidden="true">
-                <path d="M6 6l8 8m0-8-8 8" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8" />
-              </svg>
-            </button>
-          </div>
-        )}
+          )
+        }}
       </For>
     </div>
   )

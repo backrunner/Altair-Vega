@@ -36,6 +36,7 @@ Required tools:
 - Rust stable with the `wasm32-unknown-unknown` target.
 - Node.js and npm.
 - `wasm-pack` for browser WASM builds.
+- Homebrew LLVM on macOS, used by WASM dependencies that compile C code.
 - Cloudflare Wrangler through `web/rendezvous-worker` dependencies for Worker development and deployment.
 - PowerShell if validating the Windows launcher syntax/behavior locally.
 
@@ -43,6 +44,12 @@ Install Rust target:
 
 ```sh
 rustup target add wasm32-unknown-unknown
+```
+
+On macOS, install LLVM if it is not already available:
+
+```sh
+brew install llvm
 ```
 
 Install JavaScript dependencies:
@@ -69,6 +76,29 @@ cargo run -- --help
 cargo run -- pair
 ```
 
+Run the local web development stack:
+
+```sh
+scripts/dev.sh
+```
+
+The dev helper is the preferred browser debugging entrypoint. It loads the
+repository-root `.env.development`, builds the browser WASM package, installs
+missing npm dependencies, starts the local rendezvous Worker when the configured
+rendezvous URL points at localhost, and then starts the Vite frontend at
+`http://127.0.0.1:4173`.
+
+For frontend-only tab-to-tab debugging without a separate Worker, use Vite's
+same-origin dev rendezvous:
+
+```sh
+scripts/dev.sh --same-origin
+```
+
+The `scripts/startup.sh` and `scripts/startup.ps1` launchers are release/runtime
+helpers for downloading and running a native Altair Vega binary. They are not a
+local web development server.
+
 Build the browser WASM package and frontend:
 
 ```sh
@@ -76,13 +106,13 @@ npm run build:wasm:release --prefix web/frontend
 npm run build --prefix web/frontend
 ```
 
-Run the frontend dev server:
+Run the frontend dev server manually:
 
 ```sh
 npm run dev --prefix web/frontend
 ```
 
-Run the rendezvous Worker locally:
+Run the rendezvous Worker manually:
 
 ```sh
 npm run dev --prefix web/rendezvous-worker

@@ -1,8 +1,5 @@
 /* @refresh reload */
-import './styles/tokens.css'
-import './styles/reset.css'
-import './styles/global.css'
-import './styles/components.css'
+import 'virtual:uno.css'
 import { render } from 'solid-js/web'
 import App from './App'
 
@@ -13,8 +10,10 @@ if (!root) throw new Error('Root element not found')
 const savedTheme = window.localStorage.getItem('altair-vega:theme')
 if (savedTheme === 'light' || savedTheme === 'dark') {
   document.documentElement.setAttribute('data-theme', savedTheme)
+  document.documentElement.style.colorScheme = savedTheme
 } else if (window.matchMedia('(prefers-color-scheme: light)').matches) {
   document.documentElement.setAttribute('data-theme', 'light')
+  document.documentElement.style.colorScheme = 'light'
 }
 
 render(() => <App />, root)

@@ -17,11 +17,14 @@
     "build:wasm:release": "wasm-pack build ../browser-wasm --release --weak-refs --reference-types -t bundler -d ../frontend/pkg"
   },
   "dependencies": {
+    "@kobalte/core": "^0.13.11",
     "altair-vega-browser": "file:./pkg",
+    "lucide-solid": "^1.11.0",
     "solid-js": "^1.9.12"
   },
   "devDependencies": {
     "typescript": "^5.9.3",
+    "unocss": "^66.6.8",
     "vite": "^7.1.11",
     "vite-plugin-solid": "^2.11.12",
     "vite-plugin-top-level-await": "^1.6.0",

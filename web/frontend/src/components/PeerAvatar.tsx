@@ -1,6 +1,5 @@
 import { peerColor, peerInitials } from '../lib/identity'
-
-import './PeerAvatar.css'
+import { cx } from '../lib/cx'
 
 type PeerAvatarProps = {
   endpointId: string
@@ -8,21 +7,30 @@ type PeerAvatarProps = {
 }
 
 const sizeClass = {
-  sm: 'peer-avatar-sm',
-  md: 'peer-avatar-md',
-  lg: 'peer-avatar-lg',
+  sm: 'h-6 w-6',
+  md: 'h-[30px] w-[30px]',
+  lg: 'h-[38px] w-[38px]',
 } as const
+
+const initialsSizeClass = {
+  sm: 'text-[length:0.72rem]',
+  md: 'text-[length:0.72rem]',
+  lg: 'text-[length:var(--text-sm)]',
+} as const
+
+const avatarClass = 'inline-flex shrink-0 items-center justify-center rounded-[var(--radius-full)] text-white'
+const initialsClass = 'font-bold leading-none tracking-normal'
 
 export default function PeerAvatar(props: PeerAvatarProps) {
   const size = () => props.size ?? 'md'
 
   return (
     <div
-      class={`peer-avatar ${sizeClass[size()]}`}
+      class={cx(avatarClass, sizeClass[size()])}
       style={{ 'background-color': peerColor(props.endpointId) }}
       aria-hidden="true"
     >
-      <span class="peer-avatar-initials">{peerInitials(props.endpointId)}</span>
+      <span class={cx(initialsClass, initialsSizeClass[size()])}>{peerInitials(props.endpointId)}</span>
     </div>
   )
 }

@@ -6,11 +6,12 @@ use iroh::{
     endpoint::Connection,
     protocol::{AcceptError, ProtocolHandler, Router},
 };
+use iroh_tickets::endpoint::EndpointTicket;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{fs, io::AsyncWriteExt};
 use tokio_tungstenite::{
@@ -61,7 +62,6 @@ pub async fn run_browser_peer(code: String, room_url: String, output_dir: PathBu
         .await
         .context("bind native browser-peer endpoint")?;
 
-    let endpoint_id = endpoint.id().to_string();
     let router = Router::builder(endpoint)
         .accept(BROWSER_MESSAGE_ALPN, BrowserPeerMessageHandler)
         .accept(
@@ -71,11 +71,21 @@ pub async fn run_browser_peer(code: String, room_url: String, output_dir: PathBu
             },
         )
         .spawn();
+    let endpoint = router.endpoint();
+    let endpoint_id = endpoint.id().to_string();
+    if tokio::time::timeout(Duration::from_secs(10), endpoint.online())
+        .await
+        .is_err()
+    {
+        eprintln!("warning: native browser peer did not get a relay address within 10s");
+    }
+    let endpoint_ticket = EndpointTicket::new(endpoint.addr()).to_string();
 
     let mut url = Url::parse(&room_url).context("parse browser peer room URL")?;
     url.query_pairs_mut()
         .append_pair("code", &code)
         .append_pair("endpointId", &endpoint_id)
+        .append_pair("endpointTicket", &endpoint_ticket)
         .append_pair("peerType", "native-browser-peer")
         .append_pair("label", "Native Browser Peer");
 

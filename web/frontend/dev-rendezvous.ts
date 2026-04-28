@@ -12,6 +12,7 @@ type RoomPeer = {
   connectedAt: number
   peerType?: string
   label?: string
+  endpointTicket?: string
   socket: WebSocket
 }
 
@@ -34,13 +35,14 @@ export function createDevRendezvousPlugin() {
         const endpointId = url.searchParams.get('endpointId')?.trim()
         const peerType = url.searchParams.get('peerType')?.trim() || undefined
         const label = url.searchParams.get('label')?.trim() || undefined
+        const endpointTicket = url.searchParams.get('endpointTicket')?.trim() || undefined
         if (!code || !endpointId) {
           socket.destroy()
           return
         }
 
         wss.handleUpgrade(request, socket, head, (ws) => {
-          attachPeer(rooms, ws, code, endpointId, peerType, label)
+          attachPeer(rooms, ws, code, endpointId, peerType, label, endpointTicket)
         })
       })
     },
@@ -54,6 +56,7 @@ function attachPeer(
   endpointId: string,
   peerType?: string,
   label?: string,
+  endpointTicket?: string,
 ) {
   const room = rooms.get(code) ?? new Map<string, RoomPeer>()
   rooms.set(code, room)
@@ -63,6 +66,7 @@ function attachPeer(
     connectedAt: peer.connectedAt,
     peerType: peer.peerType,
     label: peer.label,
+    endpointTicket: peer.endpointTicket,
   }))
 
   const duplicate = room.get(endpointId)
@@ -76,6 +80,7 @@ function attachPeer(
     connectedAt: Date.now(),
     peerType,
     label,
+    endpointTicket,
     socket,
   }
   room.set(endpointId, peer)
@@ -90,6 +95,7 @@ function attachPeer(
     connectedAt: peer.connectedAt,
     peerType,
     label,
+    endpointTicket,
   })
 
   socket.on('close', () => {

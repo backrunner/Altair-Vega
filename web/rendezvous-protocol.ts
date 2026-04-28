@@ -23,6 +23,7 @@ export type RoomPeerInfo = {
   connectedAt: number
   peerType?: string
   label?: string
+  endpointTicket?: string
 }
 
 export type ResumeQueryPayload = {
@@ -49,7 +50,7 @@ export type ResumeRelayPayload = ResumeQueryPayload | ResumeReplyPayload
 
 export type RendezvousServerEvent =
   | { type: 'snapshot'; peers: RoomPeerInfo[] }
-  | { type: 'peer-joined'; endpointId: string; connectedAt: number; peerType?: string; label?: string }
+  | { type: 'peer-joined'; endpointId: string; connectedAt: number; peerType?: string; label?: string; endpointTicket?: string }
   | { type: 'peer-left'; endpointId: string }
   | { type: 'relay'; fromEndpointId: string; payload: ResumeRelayPayload }
 

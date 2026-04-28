@@ -83,7 +83,13 @@ export function clearPeers() {
   setState('selectedPeerId', '')
 }
 
-export function upsertPeer(endpointId: string, connectedAt: number, peerType?: string, label?: string): boolean {
+export function upsertPeer(
+  endpointId: string,
+  connectedAt: number,
+  peerType?: string,
+  label?: string,
+  endpointTicket?: string,
+): boolean {
   const selfId = state.endpointId
   if (endpointId === selfId) return false
 
@@ -96,6 +102,7 @@ export function upsertPeer(endpointId: string, connectedAt: number, peerType?: s
           peer.lastSeenAt = connectedAt
           if (peerType !== undefined) peer.peerType = peerType
           if (label !== undefined) peer.label = label
+          if (endpointTicket !== undefined) peer.endpointTicket = endpointTicket
         }
       }),
     )
@@ -104,7 +111,7 @@ export function upsertPeer(endpointId: string, connectedAt: number, peerType?: s
 
   setState(
     produce((s) => {
-      s.peers.push({ endpointId, lastSeenAt: connectedAt, peerType, label })
+      s.peers.push({ endpointId, lastSeenAt: connectedAt, peerType, label, endpointTicket })
     }),
   )
 
@@ -168,7 +175,7 @@ export function addChatMessage(msg: ChatMessage) {
   )
 }
 
-export function updateFileInChat(storageKey: string, update: Partial<ChatMessage['fileTransfer']>) {
+export function updateFileInChat(storageKey: string, update: Partial<NonNullable<ChatMessage['fileTransfer']>>) {
   setState(
     produce((s) => {
       for (const peerId of Object.keys(s.chatMessages)) {
@@ -180,6 +187,29 @@ export function updateFileInChat(storageKey: string, update: Partial<ChatMessage
           Object.assign(msg.fileTransfer, update)
           return
         }
+      }
+    }),
+  )
+}
+
+export function updateLatestFileInChat(
+  peerEndpointId: string,
+  direction: 'sent' | 'received',
+  update: Partial<NonNullable<ChatMessage['fileTransfer']>>,
+) {
+  setState(
+    produce((s) => {
+      const msgs = s.chatMessages[peerEndpointId]
+      if (!msgs) return
+      const msg = [...msgs].reverse().find(
+        (m) => m.variant === 'file'
+          && m.direction === direction
+          && m.fileTransfer
+          && !m.fileTransfer.completed
+          && !m.fileTransfer.failed,
+      )
+      if (msg?.fileTransfer) {
+        Object.assign(msg.fileTransfer, update)
       }
     }),
   )
@@ -212,6 +242,7 @@ export function toggleTheme() {
   setState('theme', next)
   window.localStorage.setItem('altair-vega:theme', next)
   document.documentElement.setAttribute('data-theme', next)
+  document.documentElement.style.colorScheme = next
 }
 
 export function setSettingsOpen(open: boolean) {

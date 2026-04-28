@@ -1,12 +1,26 @@
 import { onMount, onCleanup } from 'solid-js'
+import { X } from 'lucide-solid'
 
-import './ImageViewer.css'
+import { IconButton } from './ui/Button'
 
 type ImageViewerProps = {
   src: string
   alt: string
   onClose: () => void
 }
+
+const imageViewerClass = [
+  'fixed inset-0 z-[1200] flex cursor-zoom-out items-center justify-center',
+  'bg-[rgba(0,0,0,0.85)] backdrop-blur-sm animate-[fade-in_var(--duration-normal)_var(--ease-out)]',
+].join(' ')
+const imageViewerCloseClass = [
+  'absolute right-[var(--space-4)] top-[var(--space-4)] z-[1]',
+  'text-[rgba(255,255,255,0.8)] hover:bg-[rgba(255,255,255,0.12)] hover:text-white',
+].join(' ')
+const imageViewerImageClass = [
+  'max-h-[90vh] max-w-[90vw] cursor-default rounded-[var(--radius-md)] object-contain',
+  'shadow-[0_8px_40px_rgba(0,0,0,0.5)] animate-[dialog-in_var(--duration-normal)_var(--ease-out)]',
+].join(' ')
 
 export default function ImageViewer(props: ImageViewerProps) {
   const handleKeyDown = (e: KeyboardEvent) => {
@@ -22,14 +36,12 @@ export default function ImageViewer(props: ImageViewerProps) {
   })
 
   return (
-    <div class="image-viewer" role="dialog" aria-label="Image viewer" onClick={props.onClose}>
-      <button class="image-viewer__close btn btn-ghost btn-icon" type="button" onClick={props.onClose} aria-label="Close viewer">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-          <path d="M6 6l12 12m0-12L6 18" />
-        </svg>
-      </button>
+    <div class={imageViewerClass} role="dialog" aria-label="Image viewer" onClick={props.onClose}>
+      <IconButton class={imageViewerCloseClass} variant="ghost" label="Close viewer" onClick={props.onClose}>
+        <X size={22} />
+      </IconButton>
       <img
-        class="image-viewer__img"
+        class={imageViewerImageClass}
         src={props.src}
         alt={props.alt}
         onClick={(e) => e.stopPropagation()}

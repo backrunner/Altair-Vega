@@ -22,6 +22,7 @@ type RoomSession = {
   connectedAt: number
   peerType?: string
   label?: string
+  endpointTicket?: string
   limits?: RoomLimits
 }
 
@@ -36,6 +37,7 @@ const DEFAULT_MAX_ROOM_PEERS = 8
 const DEFAULT_MAX_MESSAGE_BYTES = 256 * 1024
 const MAX_CODE_BYTES = 128
 const MAX_ENDPOINT_ID_BYTES = 128
+const MAX_ENDPOINT_TICKET_BYTES = 4096
 const MAX_PEER_TYPE_BYTES = 64
 const MAX_LABEL_BYTES = 96
 
@@ -106,6 +108,7 @@ export class Room extends DurableObject {
     const endpointId = url.searchParams.get('endpointId')?.trim()
     const peerType = boundedOptionalParam(url, 'peerType', MAX_PEER_TYPE_BYTES)
     const label = boundedOptionalParam(url, 'label', MAX_LABEL_BYTES)
+    const endpointTicket = boundedOptionalParam(url, 'endpointTicket', MAX_ENDPOINT_TICKET_BYTES)
     const limits = roomLimitsFromUrl(url)
     if (!endpointId) {
       return new Response('Missing endpointId', { status: 400 })
@@ -113,7 +116,7 @@ export class Room extends DurableObject {
     if (!isSafeToken(endpointId, MAX_ENDPOINT_ID_BYTES)) {
       return new Response('Invalid endpointId', { status: 400 })
     }
-    if (peerType === null || label === null) {
+    if (peerType === null || label === null || endpointTicket === null) {
       return new Response('Invalid peer metadata', { status: 400 })
     }
 
@@ -136,6 +139,7 @@ export class Room extends DurableObject {
       connectedAt: Date.now(),
       peerType,
       label,
+      endpointTicket,
       limits,
     }
     this.ctx.acceptWebSocket(server)
@@ -145,6 +149,7 @@ export class Room extends DurableObject {
       connectedAt: peer.connectedAt,
       peerType: peer.peerType,
       label: peer.label,
+      endpointTicket: peer.endpointTicket,
     }))
 
     this.sessions.set(server, session)
@@ -158,6 +163,7 @@ export class Room extends DurableObject {
       connectedAt: session.connectedAt,
       peerType,
       label,
+      endpointTicket,
     })
 
     return new Response(null, {
@@ -299,6 +305,7 @@ function isRoomSession(value: unknown): value is RoomSession {
     typeof session.connectedAt === 'number' &&
     (session.peerType === undefined || typeof session.peerType === 'string') &&
     (session.label === undefined || typeof session.label === 'string') &&
+    (session.endpointTicket === undefined || typeof session.endpointTicket === 'string') &&
     (session.limits === undefined || isRoomLimits(session.limits))
   )
 }

@@ -1,19 +1,74 @@
 import { Show, createEffect, createSignal, onCleanup } from 'solid-js'
+import { FileText, Image as ImageIcon, Paperclip, Send, X } from 'lucide-solid'
 
 import { formatBytes, isImageMime } from '../lib/format'
 import { state } from '../lib/state'
-
-import './ComposeBar.css'
+import { cx } from '../lib/cx'
+import { IconButton } from './ui/Button'
 
 type ComposeBarProps = {
   onSendMessage: (text: string) => void
   onSendFile: (file: File) => void
 }
 
+const composeBarClass = [
+  'sticky bottom-0 flex flex-col gap-[var(--space-2)] border-t border-t-[var(--color-border)]',
+  'bg-[color-mix(in_srgb,var(--color-surface)_88%,transparent)]',
+  'p-[var(--space-2)_var(--space-3)_calc(var(--space-3)+env(safe-area-inset-bottom,0px))]',
+  'backdrop-blur-[10px] min-[561px]:p-[var(--space-3)]',
+].join(' ')
+const composeBarDisabledClass = 'opacity-92'
+const composeBarShellClass = 'grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-[var(--space-2)]'
+const composeBarButtonClass = [
+  '!h-10 !min-h-10 !min-w-10 !w-10 self-center rounded-[var(--radius-md)] p-0',
+  '[&_svg]:!h-[16px] [&_svg]:!w-[16px]',
+].join(' ')
+const composeBarInputWrapClass = [
+  'flex min-h-10 min-w-0 flex-col justify-center gap-[var(--space-2)]',
+  'border border-[color-mix(in_srgb,var(--color-border)_72%,var(--color-primary))]',
+  'rounded-[var(--radius-module)] bg-[color-mix(in_srgb,var(--color-bg-inset)_66%,var(--color-surface))]',
+  'px-[var(--space-3)] py-[7px]',
+  'shadow-[inset_0_1px_0_color-mix(in_srgb,var(--color-surface-raised)_48%,transparent)]',
+  'focus-within:border-[var(--color-accent)] focus-within:shadow-[0_0_0_3px_var(--color-accent-subtle)]',
+].join(' ')
+const composeBarAttachmentClass = [
+  'grid min-h-10 w-full max-w-[min(100%,420px)] grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-[var(--space-2)]',
+  'rounded-[var(--radius-md)] border border-[var(--color-border-subtle)]',
+  'bg-[color-mix(in_srgb,var(--color-surface-raised)_72%,var(--color-bg-muted))]',
+  'p-[4px_6px_4px_4px] text-[length:var(--text-xs)]',
+  'shadow-[inset_0_1px_0_color-mix(in_srgb,var(--color-surface)_60%,transparent)]',
+].join(' ')
+const composeBarAttachmentMediaClass = [
+  'inline-flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-[var(--radius-sm)]',
+  'bg-[var(--color-primary-subtle)] text-[var(--color-primary)]',
+  '[&_svg]:h-[15px] [&_svg]:w-[15px]',
+].join(' ')
+const composeBarAttachmentImageFallbackClass = 'bg-[var(--color-secondary-subtle)] text-[var(--color-secondary)]'
+const composeBarAttachmentThumbClass = 'h-full w-full object-cover'
+const composeBarAttachmentInfoClass = 'flex min-w-0 flex-col justify-center gap-[1px]'
+const composeBarChipNameClass = [
+  'min-w-0 overflow-hidden text-ellipsis whitespace-nowrap',
+  'text-[var(--color-text)] font-650 leading-[var(--leading-tight)]',
+].join(' ')
+const composeBarChipSizeClass = 'text-[var(--color-text-muted)] leading-[var(--leading-tight)]'
+const composeBarChipRemoveClass = [
+  'inline-flex h-7 w-7 shrink-0 items-center justify-center border-none rounded-[var(--radius-md)]',
+  'bg-transparent p-0 text-[var(--color-text-secondary)] text-[length:1rem] leading-none',
+  'transition hover:bg-[var(--color-bg-inset)] hover:text-[var(--color-text)]',
+].join(' ')
+const composeBarTextareaClass = [
+  'm-0 h-auto min-h-5 max-h-24 w-full resize-none border-none bg-transparent p-0',
+  'text-[var(--color-text)] text-[length:var(--text-sm)] leading-5',
+  'focus:outline-none placeholder:text-[var(--color-text-muted)]',
+  'placeholder:text-[length:var(--text-sm)] placeholder:leading-5',
+].join(' ')
+const composeBarSendClass = composeBarButtonClass
+
 export default function ComposeBar(props: ComposeBarProps) {
   const [text, setText] = createSignal('')
   const [attachedFile, setAttachedFile] = createSignal<File | null>(null)
   const [previewUrl, setPreviewUrl] = createSignal<string | null>(null)
+  const [previewFailed, setPreviewFailed] = createSignal(false)
 
   let textareaRef: HTMLTextAreaElement | undefined
   let fileInputRef: HTMLInputElement | undefined
@@ -23,6 +78,7 @@ export default function ComposeBar(props: ComposeBarProps) {
     const f = attachedFile()
     return f !== null && isImageMime(f.type)
   }
+  const hasAttachmentPreview = () => attachedIsImage() && previewUrl() !== null && !previewFailed()
 
   const resizeTextarea = () => {
     const textarea = textareaRef
@@ -38,12 +94,14 @@ export default function ComposeBar(props: ComposeBarProps) {
     const url = previewUrl()
     if (url) URL.revokeObjectURL(url)
     setPreviewUrl(null)
+    setPreviewFailed(false)
   }
 
   const attachFile = (file: File) => {
     revokePreview()
     setAttachedFile(file)
     if (isImageMime(file.type)) {
+      setPreviewFailed(false)
       setPreviewUrl(URL.createObjectURL(file))
     }
   }
@@ -106,12 +164,8 @@ export default function ComposeBar(props: ComposeBarProps) {
   })
 
   return (
-    <div class={`compose-bar ${!state.selectedPeerId ? 'is-disabled' : ''}`}>
-      <Show when={!state.selectedPeerId}>
-        <div class="compose-bar-hint">Select a peer to start</div>
-      </Show>
-
-      <div class="compose-bar-shell">
+    <div class={cx(composeBarClass, !state.selectedPeerId && composeBarDisabledClass)}>
+      <div class={composeBarShellClass}>
         <input
           ref={fileInputRef}
           class="sr-only"
@@ -120,46 +174,68 @@ export default function ComposeBar(props: ComposeBarProps) {
           tabIndex={-1}
         />
 
-        <button
+        <IconButton
           type="button"
-          class="btn btn-subtle btn-icon compose-bar-attach"
+          class={composeBarButtonClass}
+          variant="secondary"
           onClick={() => fileInputRef?.click()}
           disabled={!state.selectedPeerId}
-          aria-label="Attach file"
+          label="Attach file"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 11.5 12.8 19.7a5 5 0 0 1-7.1-7.1L14.6 3.7a3.5 3.5 0 0 1 5 5l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.4-8.4" />
-          </svg>
-        </button>
+          <Paperclip size={16} />
+        </IconButton>
 
-        <div class="compose-bar-input-wrap">
+        <div class={composeBarInputWrapClass}>
           <Show when={attachedFile()}>
             {(file) => (
-              <Show
-                when={attachedIsImage() && previewUrl()}
-                fallback={
-                  <div class="compose-bar-chip">
-                    <span class="compose-bar-chip-name" title={file().name}>{file().name}</span>
-                    <span class="compose-bar-chip-size">{formatBytes(file().size)}</span>
-                    <button type="button" class="compose-bar-chip-remove" onClick={clearAttachment} aria-label="Remove attached file">×</button>
-                  </div>
-                }
-              >
-                <div class="compose-bar-image-preview">
-                  <img src={previewUrl()!} alt={file().name} class="compose-bar-image-thumb" />
-                  <div class="compose-bar-image-info">
-                    <span class="compose-bar-chip-name" title={file().name}>{file().name}</span>
-                    <span class="compose-bar-chip-size">{formatBytes(file().size)}</span>
-                  </div>
-                  <button type="button" class="compose-bar-chip-remove" onClick={clearAttachment} aria-label="Remove attached image">×</button>
+              <div class={composeBarAttachmentClass}>
+                <Show
+                  when={hasAttachmentPreview()}
+                  fallback={
+                    <span
+                      class={cx(
+                        composeBarAttachmentMediaClass,
+                        attachedIsImage() && composeBarAttachmentImageFallbackClass,
+                      )}
+                      aria-hidden="true"
+                    >
+                      <Show when={attachedIsImage()} fallback={<FileText size={15} />}>
+                        <ImageIcon size={15} />
+                      </Show>
+                    </span>
+                  }
+                >
+                  <span class={composeBarAttachmentMediaClass}>
+                    <img
+                      src={previewUrl()!}
+                      alt=""
+                      class={composeBarAttachmentThumbClass}
+                      onError={() => setPreviewFailed(true)}
+                      onLoad={() => setPreviewFailed(false)}
+                    />
+                  </span>
+                </Show>
+
+                <div class={composeBarAttachmentInfoClass}>
+                  <span class={composeBarChipNameClass} title={file().name}>{file().name}</span>
+                  <span class={composeBarChipSizeClass}>{formatBytes(file().size)}</span>
                 </div>
-              </Show>
+
+                <button
+                  type="button"
+                  class={composeBarChipRemoveClass}
+                  onClick={clearAttachment}
+                  aria-label={attachedIsImage() ? 'Remove attached image' : 'Remove attached file'}
+                >
+                  <X size={13} />
+                </button>
+              </div>
             )}
           </Show>
 
           <textarea
             ref={textareaRef}
-            class="compose-bar-textarea"
+            class={composeBarTextareaClass}
             rows={1}
             value={text()}
             placeholder={state.selectedPeerId ? 'Write a message' : 'Select a peer to start'}
@@ -170,18 +246,15 @@ export default function ComposeBar(props: ComposeBarProps) {
           />
         </div>
 
-        <button
+        <IconButton
           type="button"
-          class="compose-bar-send"
+          class={composeBarSendClass}
           onClick={handleSubmit}
           disabled={!canSend()}
-          aria-label="Send"
+          label="Send"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 18V6" />
-            <path d="m7 11 5-5 5 5" />
-          </svg>
-        </button>
+          <Send size={16} />
+        </IconButton>
       </div>
     </div>
   )

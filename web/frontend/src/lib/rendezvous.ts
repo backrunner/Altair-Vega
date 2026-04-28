@@ -39,13 +39,14 @@ export type RoomCallbacks = {
   onClose: (code: string, reason?: string) => void
   onError: (code: string) => void
   onReconnecting: (code: string, attempt: number, delayMs: number) => void
-  onFallbackPresence: (endpointId: string, announcedAt: number) => void
+  onFallbackPresence: (endpointId: string, announcedAt: number, endpointTicket?: string) => void
   onFallbackRelayUnavailable: () => void
 }
 
 export function connectRoom(
   code: string,
   endpointId: string,
+  endpointTicket: string | undefined,
   callbacks: RoomCallbacks,
 ): RoomConnection {
   let closedIntentionally = false
@@ -60,6 +61,9 @@ export function connectRoom(
     wsUrl.searchParams.set('endpointId', endpointId)
     wsUrl.searchParams.set('peerType', 'browser-web')
     wsUrl.searchParams.set('label', 'Browser Web')
+    if (endpointTicket) {
+      wsUrl.searchParams.set('endpointTicket', endpointTicket)
+    }
 
     const nextSocket = new WebSocket(wsUrl)
     socket = nextSocket
@@ -73,7 +77,7 @@ export function connectRoom(
       const closeReason = event ? describeRendezvousClose(event.code, event.reason) : null
       if (closeReason) {
         callbacks.onClose(code, closeReason)
-        fallbackConnection = fallbackToBroadcastChannel(code, endpointId, callbacks)
+        fallbackConnection = fallbackToBroadcastChannel(code, endpointId, endpointTicket, callbacks)
         return
       }
 
@@ -86,7 +90,7 @@ export function connectRoom(
       }
 
       callbacks.onClose(code)
-      fallbackConnection = fallbackToBroadcastChannel(code, endpointId, callbacks)
+      fallbackConnection = fallbackToBroadcastChannel(code, endpointId, endpointTicket, callbacks)
     }
 
     nextSocket.addEventListener('open', () => {
@@ -140,17 +144,18 @@ export function connectRoom(
 function fallbackToBroadcastChannel(
   code: string,
   endpointId: string,
+  endpointTicket: string | undefined,
   callbacks: RoomCallbacks,
 ): RoomConnection {
   const channel = new BroadcastChannel(`altair-vega-dev::${code}`)
 
   channel.onmessage = (event: MessageEvent<PresenceMessage>) => {
     if (event.data.type !== 'presence' || event.data.endpointId === endpointId) return
-    callbacks.onFallbackPresence(event.data.endpointId, event.data.announcedAt)
+    callbacks.onFallbackPresence(event.data.endpointId, event.data.announcedAt, event.data.endpointTicket)
   }
 
-  broadcastPresence(channel, endpointId, true)
-  const timer = window.setInterval(() => broadcastPresence(channel, endpointId, false), 5000)
+  broadcastPresence(channel, endpointId, endpointTicket, true)
+  const timer = window.setInterval(() => broadcastPresence(channel, endpointId, endpointTicket, false), 5000)
 
   return {
     close() {
@@ -163,11 +168,17 @@ function fallbackToBroadcastChannel(
   }
 }
 
-function broadcastPresence(channel: BroadcastChannel, endpointId: string, requestReply: boolean) {
+function broadcastPresence(
+  channel: BroadcastChannel,
+  endpointId: string,
+  endpointTicket: string | undefined,
+  requestReply: boolean,
+) {
   channel.postMessage({
     type: 'presence',
     endpointId,
     announcedAt: Date.now(),
     requestReply,
+    endpointTicket,
   } satisfies PresenceMessage)
 }
