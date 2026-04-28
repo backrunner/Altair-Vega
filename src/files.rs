@@ -749,8 +749,7 @@ async fn run_local_file_probe_with_options(
                 }
                 FileTransport::ChunkedStream => sender_progress
                     .iter()
-                    .filter(|item| item.phase == FileProgressPhase::Sending)
-                    .next_back()
+                    .rfind(|item| item.phase == FileProgressPhase::Sending)
                     .map(|item| item.bytes_complete)
                     .unwrap_or(0),
             };
