@@ -1,6 +1,6 @@
 [package]
 name = "altair-vega-browser"
-version = "0.9.0-RC1"
+version = "0.9.0-RC2"
 edition = "2024"
 license = "BSD-3-Clause"
 repository = "https://github.com/EL-File4138/Altair-Vega"
@@ -11,21 +11,22 @@ crate-type = ["cdylib"]
 
 [dependencies]
 altair-vega = { path = "../.." }
-anyhow = "1.0.100"
+anyhow = "1.0.102"
 async-channel = "2.5.0"
-blake3 = "1.8.2"
+blake3 = "1.8.5"
 hex = "0.4.3"
 iroh = { version = "0.97.0", default-features = false }
 iroh-tickets = "0.4.0"
-js-sys = "0.3.82"
+js-sys = "0.3.97"
 n0-future = "0.3.2"
+pkcs8 = "=0.11.0-rc.11"
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.145"
+serde_json = "1.0.149"
 serde-wasm-bindgen = "0.6.5"
-tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.20", features = ["fmt"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["fmt"] }
 tracing-subscriber-wasm = "0.1.0"
-wasm-bindgen = "0.2.105"
-wasm-bindgen-futures = "0.4.55"
+wasm-bindgen = "0.2.120"
+wasm-bindgen-futures = "0.4.70"
 wasm-streams = "0.4.2"
 console_error_panic_hook = "0.1.7"
