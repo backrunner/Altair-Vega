@@ -75,4 +75,15 @@ jobs:
           path: artifacts
       - uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          files: |
+            artifacts/altair-vega-Linux-X64/altair-vega-linux-x86_64
+            artifacts/altair-vega-Linux-X64/altair-vega-linux-x86_64.sha256
+            artifacts/altair-vega-macOS-ARM64/altair-vega-macos-aarch64
+            artifacts/altair-vega-macOS-ARM64/altair-vega-macos-aarch64.sha256
+            artifacts/altair-vega-Windows-X64/altair-vega-windows-x86_64.exe
+            artifacts/altair-vega-Windows-X64/altair-vega-windows-x86_64.exe.sha256
+            artifacts/altair-vega-web-dist/altair-vega-web-dist.tar.gz
+            artifacts/altair-vega-web-dist/altair-vega-web-dist.tar.gz.sha256
+            artifacts/altair-vega-Linux-X64/LICENSE
+            artifacts/altair-vega-Linux-X64/startup.sh
+            artifacts/altair-vega-Linux-X64/startup.ps1
