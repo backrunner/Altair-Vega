@@ -156,13 +156,16 @@ mod tests {
 
     #[test]
     fn preferred_runtime_parent_prefers_xdg_runtime_dir() {
-        let fallback = PathBuf::from("/tmp/fallback-root");
+        let temp = TempDir::new().unwrap();
+        let xdg_runtime_dir = temp.path().join("run-user-1000");
+        fs::create_dir(&xdg_runtime_dir).unwrap();
+        let fallback = temp.path().join("fallback-root");
         let resolved = preferred_runtime_parent_from(
-            Some(Path::new("/run/user/1000")),
-            Path::new("/dev/shm"),
+            Some(&xdg_runtime_dir),
+            &temp.path().join("dev-shm"),
             fallback,
         );
-        assert_eq!(resolved, PathBuf::from("/run/user/1000"));
+        assert_eq!(resolved, xdg_runtime_dir);
     }
 
     #[test]

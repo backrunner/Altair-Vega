@@ -1123,6 +1123,12 @@ mod tests {
         let temp = TempDir::new().unwrap();
         fs::write(temp.path().join("Readme.txt"), b"upper").unwrap();
         fs::write(temp.path().join("readme.txt"), b"lower").unwrap();
+        let supports_case_sensitive_names = fs::read(temp.path().join("Readme.txt"))
+            .is_ok_and(|contents| contents == b"upper")
+            && fs::read(temp.path().join("readme.txt")).is_ok_and(|contents| contents == b"lower");
+        if !supports_case_sensitive_names {
+            return;
+        }
 
         let error = scan_directory(temp.path(), DEFAULT_SYNC_CHUNK_SIZE_BYTES).unwrap_err();
 
@@ -1179,7 +1185,9 @@ mod tests {
 
         let temp = TempDir::new().unwrap();
         let non_utf8_name = OsString::from_vec(vec![b'b', b'a', b'd', 0xff]);
-        fs::write(temp.path().join(non_utf8_name), b"bad").unwrap();
+        if fs::write(temp.path().join(non_utf8_name), b"bad").is_err() {
+            return;
+        }
 
         let error = scan_directory(temp.path(), DEFAULT_SYNC_CHUNK_SIZE_BYTES).unwrap_err();
 

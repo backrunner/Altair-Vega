@@ -1,5 +1,3 @@
-$ErrorActionPreference = 'Stop'
-
 param(
     [string]$Url = $env:ALTAIR_VEGA_BIN_URL,
     [string]$RuntimeParent,
@@ -8,6 +6,8 @@ param(
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$CommandArgs
 )
+
+$ErrorActionPreference = 'Stop'
 
 function Show-Usage {
     @"
